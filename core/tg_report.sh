@@ -47,15 +47,15 @@ NODE_ALIAS="${NODE_ALIAS:-$NODE_NAME}"
 # ----------------------------------------------------------
 # [容灾探针 1] 底层路由锁定与多节点出口 IP 嗅探
 # ----------------------------------------------------------
-CURL_BIND_OPT=""
+CURL_BIND_ARGS=()
 DYNAMIC_IP_PREF="-${IP_PREF:-4}"
 
 if [[ -n "$BIND_IP" && "$BIND_IP" =~ ^[0-9a-fA-F:\.]+$ ]]; then
     RAW_BIND_IP=$(echo "$BIND_IP" | tr -d '[]')
     if ! ip addr show 2>/dev/null | grep -qw "$RAW_BIND_IP"; then
-        CURL_BIND_OPT=""
+        CURL_BIND_ARGS=()
     else
-        CURL_BIND_OPT="--interface $BIND_IP"
+        CURL_BIND_ARGS=(--interface "$BIND_IP")
         if [[ "$BIND_IP" == *":"* ]]; then
             DYNAMIC_IP_PREF="-6"
         elif [[ "$BIND_IP" == *"."* ]]; then
@@ -65,7 +65,7 @@ if [[ -n "$BIND_IP" && "$BIND_IP" =~ ^[0-9a-fA-F:\.]+$ ]]; then
 fi
 
 # 结合协议自适应进行外部 IP 回显探测
-CURRENT_IP=$( (curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -s -m 5 api.ip.sb/ip || curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -s -m 5 ifconfig.me) 2>/dev/null | tr -d '[:space:]' )
+CURRENT_IP=$( (curl "${CURL_BIND_ARGS[@]}" "$DYNAMIC_IP_PREF" -s -m 5 api.ip.sb/ip || curl "${CURL_BIND_ARGS[@]}" "$DYNAMIC_IP_PREF" -s -m 5 ifconfig.me) 2>/dev/null | tr -d '[:space:]' )
 # 强制兜底逻辑：网络完全阻断时回退使用配置文件锚点
 [ -z "$CURRENT_IP" ] && CURRENT_IP="${PUBLIC_IP:-$BIND_IP}"
 
@@ -78,17 +78,17 @@ CURRENT_IP=$( (curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -s -m 5 api.ip.sb/ip || curl
 ISP_INFO=""
 
 # 优先级 A: 高吞吐极速纯文本接口
-ISP_INFO=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -s -m 5 ipinfo.io/org 2>/dev/null)
+ISP_INFO=$(curl "${CURL_BIND_ARGS[@]}" "$DYNAMIC_IP_PREF" -s -m 5 ipinfo.io/org 2>/dev/null)
 
 # 优先级 B: 备用纯文本接口
 if [ -z "$ISP_INFO" ] || [[ "$ISP_INFO" == *"error"* ]]; then
-    ISP_INFO=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -s -m 5 ip-api.com/line/?fields=isp 2>/dev/null)
+    ISP_INFO=$(curl "${CURL_BIND_ARGS[@]}" "$DYNAMIC_IP_PREF" -s -m 5 ip-api.com/line/?fields=isp 2>/dev/null)
 fi
 
 # 优先级 C: 需构建环境依赖的 JSON 接口
 if [ -z "$ISP_INFO" ] || [[ "$ISP_INFO" == *"error"* ]]; then
     if command -v jq &> /dev/null; then
-        ISP_INFO=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -s -m 5 api.ip.sb/geoip | jq -r '.organization' 2>/dev/null)
+        ISP_INFO=$(curl "${CURL_BIND_ARGS[@]}" "$DYNAMIC_IP_PREF" -s -m 5 api.ip.sb/geoip | jq -r '.organization' 2>/dev/null)
     fi
 fi
 

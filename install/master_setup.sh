@@ -155,14 +155,18 @@ do_master_config() {
             MASTER_NODE_NAME="${CLEAN_ALIAS:0:20}"
             [ -z "$MASTER_NODE_NAME" ] && MASTER_NODE_NAME="$MASTER_NODE"
         else
-            MASTER_NODE_NAME="$MASTER_NODE"
+	MASTER_NODE_NAME="$MASTER_NODE"
         fi
         echo -e "✅ 已锁定司令部展示别名: \033[32m$MASTER_NODE_NAME\033[0m"
+
+        # [P0-003] 安装时生成随机 HMAC 签名密钥
+        HMAC_SECRET="$(openssl rand -hex 32)"
 
         cat > "${MASTER_DIR}/master.conf" << EOF
 # IP-Sentinel Master 本地固化配置 (v${TARGET_VERSION})
 MASTER_VERSION="$TARGET_VERSION"
 MASTER_NODE_NAME="$MASTER_NODE_NAME"
+HMAC_SECRET="$HMAC_SECRET"
 TG_TOKEN="$TG_TOKEN"
 DB_FILE="$DB_FILE"
 MASTER_DIR="$MASTER_DIR"

@@ -163,9 +163,12 @@ do_write_config() {
         BASE_LAT=$(jq -r '.google_module.base_lat' "$REGION_JSON_FILE")
         BASE_LON=$(jq -r '.google_module.base_lon' "$REGION_JSON_FILE")
         LANG_PARAMS=$(jq -r '.google_module.lang_params' "$REGION_JSON_FILE")
-        VALID_URL_SUFFIX=$(jq -r '.google_module.valid_url_suffix' "$REGION_JSON_FILE")
+	VALID_URL_SUFFIX=$(jq -r '.google_module.valid_url_suffix' "$REGION_JSON_FILE")
 
-        cat > "$CONFIG_FILE" << EOF
+	# [P0-003] 安装时生成随机 HMAC 签名密钥
+	HMAC_SECRET="$(openssl rand -hex 32)"
+
+	cat > "$CONFIG_FILE" << EOF
 # IP-Sentinel 本地固化配置 (生成时间: $(date '+%Y-%m-%d %H:%M:%S'))
 AGENT_VERSION="$TARGET_VERSION"
 REGION_CODE="$REGION_CODE"
@@ -182,6 +185,7 @@ ENABLE_TRUST="$ENABLE_TRUST"
 TG_TOKEN="$TG_TOKEN"
 TG_API_URL="$TG_API_URL"
 CHAT_ID="$CHAT_ID"
+HMAC_SECRET="$HMAC_SECRET"
 AGENT_PORT="$AGENT_PORT"
 INSTALL_DIR="$INSTALL_DIR"
 LOG_FILE="${INSTALL_DIR}/logs/sentinel.log"
