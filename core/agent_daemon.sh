@@ -382,7 +382,38 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"400 Bad Request: Invalid Characters\n")
 
-        # 路由 7: 功能模块动态起停 (Feature Flag API)
+        # 路由 7: 证书指纹查询 (TLS Pinning)
+        elif req_path == '/cert_fp':
+            try:
+                cert_path = '/opt/ip_sentinel/core/cert.pem'
+                if os.path.exists(cert_path):
+                    result = subprocess.run(
+                        ['openssl', 'x509', '-noout', '-fingerprint', '-sha256', '-in', cert_path],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode == 0:
+                        fp_line = result.stdout.strip()
+                        # Format: "SHA256 Fingerprint=AB:CD:EF:..."
+                        fingerprint = fp_line.split('=')[1].replace(':', '').upper()
+                        self.send_response(200)
+                        self.send_header("Content-type", "text/plain")
+                        self.end_headers()
+                        self.wfile.write(fingerprint.encode('utf-8'))
+                    else:
+                        self.send_response(500)
+                        self.end_headers()
+                        self.wfile.write(b"500 Cannot read certificate\n")
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b"404 No certificate found\n")
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"500 Error: {str(e)}\n".encode('utf-8'))
+            return
+
+        # 路由 8: 功能模块动态起停 (Feature Flag API)
         elif req_path == '/trigger_toggle':
             mod_name = query.get('mod', [''])[0]
             target_state = query.get('state', [''])[0].lower()

@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     enable_google TEXT DEFAULT 'true',
     enable_trust TEXT DEFAULT 'true',
     enable_ota TEXT DEFAULT 'false',
+    cert_fp TEXT DEFAULT '',
     PRIMARY KEY(chat_id, node_name)
 );
 

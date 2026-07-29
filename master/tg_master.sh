@@ -95,6 +95,7 @@ call_agent() {
     local port="$2"
     local path="$3"
     local suffix="$4"
+    local cert_fingerprint="$5"   # [P1-002] 证书 SHA256 指纹，用于 TLS 固定钉扎验证
     local res="FAILED"
     
     # 将长串中的下划线统一洗回逗号，确保万无一失的弹匣拆解
@@ -105,8 +106,14 @@ call_agent() {
             local url=$(generate_signed_url "$ip" "$port" "$path")
             [ -n "$suffix" ] && url="${url}${suffix}"
             
-            # 缩短单次重试时间，实现用户无感知的秒级降级切换
-            res=$(curl -k -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
+            # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
+            if [ -n "$cert_fingerprint" ]; then
+                res=$(curl -s --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
+            else
+                echo "[⚠️ P1-002] 节点 $ip 无证书指纹，使用 --insecure 回退模式（建议升级 Agent）" >&2
+                res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
+            fi
+            
             if [ "$res" != "FAILED" ] && [ -n "$res" ]; then
                 echo "$res"
                 return
@@ -121,6 +128,9 @@ call_agent() {
 # ==========================================================
 db_exec "PRAGMA journal_mode=WAL;" > /dev/null 2>&1
 db_exec "PRAGMA synchronous=NORMAL;" > /dev/null 2>&1
+
+# [P1-002] 确保 cert_fp 列存在（兼容旧数据库）
+db_exec "ALTER TABLE nodes ADD COLUMN cert_fp TEXT DEFAULT '';" 2>/dev/null || true
 
 # 自动探测并动态扩展节点基础表结构，屏蔽已存在的报错
 db_exec "ALTER TABLE nodes ADD COLUMN region TEXT DEFAULT 'UNKNOWN';" 2>/dev/null
@@ -279,7 +289,19 @@ except:
                 fi
 
                 # [v4.2.2 容灾对齐] 允许 agent_ip 字段以逗号分隔的形式完整固化多路由通道
-                db_exec "INSERT INTO nodes (chat_id, node_name, agent_ip, agent_port, last_seen, region, node_alias, enable_ota) VALUES ('$CHAT_ID', '$NODE_NAME', '$AGENT_IP', '$AGENT_PORT', CURRENT_TIMESTAMP, '$AGENT_REGION', '$NODE_ALIAS', '$AGENT_OTA') ON CONFLICT(chat_id, node_name) DO UPDATE SET agent_ip='$AGENT_IP', agent_port='$AGENT_PORT', last_seen=CURRENT_TIMESTAMP, region='$AGENT_REGION', node_alias='$NODE_ALIAS', enable_ota='$AGENT_OTA';"
+                db_exec "INSERT INTO nodes (chat_id, node_name, agent_ip, agent_port, last_seen, region, node_alias, enable_ota, cert_fp) VALUES ('$CHAT_ID', '$NODE_NAME', '$AGENT_IP', '$AGENT_PORT', CURRENT_TIMESTAMP, '$AGENT_REGION', '$NODE_ALIAS', '$AGENT_OTA', '') ON CONFLICT(chat_id, node_name) DO UPDATE SET agent_ip='$AGENT_IP', agent_port='$AGENT_PORT', last_seen=CURRENT_TIMESTAMP, region='$AGENT_REGION', node_alias='$NODE_ALIAS', enable_ota='$AGENT_OTA', cert_fp=CASE WHEN cert_fp='' THEN '' ELSE cert_fp END;"
+
+                # [P1-002] 注册后尝试获取 Agent 证书指纹用于后续 TLS 固定钉扎
+                CERT_FP=""
+                if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+                    AGENT_SINGLE_IP=$(echo "$AGENT_IP" | tr '_' ',' | cut -d',' -f1 | tr -d '[]')
+                    FP_URL="https://${AGENT_SINGLE_IP}:${AGENT_PORT}/cert_fp"
+                    # 首次获取指纹时 Agent 只有自签名证书，所以需要用 --insecure
+                    CERT_FP=$(curl --insecure -s --connect-timeout 4 -m 8 "$FP_URL" 2>/dev/null || echo "")
+                    if [ -n "$CERT_FP" ] && [[ "$CERT_FP" =~ ^[A-F0-9]{64}$ ]]; then
+                        db_exec "UPDATE nodes SET cert_fp='$CERT_FP' WHERE chat_id='$CHAT_ID' AND node_name='$NODE_NAME';"
+                    fi
+                fi
                 
                 # 统一将下划线替换为逗号，再进行格式化输出，兼容您的所有测试版本
                 FMT_AGENT_IP=$(echo "$AGENT_IP" | tr '_' ',')
