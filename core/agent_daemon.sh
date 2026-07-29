@@ -110,10 +110,12 @@ PORT = int(sys.argv[1])
 # ----------------------------------------------------------
 MAX_NONCE_CACHE = 100000
 USED_SIGNS = OrderedDict()
+NONCE_LOCK = threading.Lock()
 
 def clean_used_signs():
     now = time.time()
     # [安全策略] 滑动窗口清理过期条目，性能优化为从头检查（OrderedDict FIFO 特性）
+    # 调用方必须持有 NONCE_LOCK
     while USED_SIGNS:
         s, t = next(iter(USED_SIGNS.items()))
         if now - t > 65:
@@ -145,8 +147,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         req_path = parsed.path
         
+        query = urllib.parse.parse_qs(parsed.query)
+        
         if AUTH_TOKEN:
-            query = urllib.parse.parse_qs(parsed.query)
             req_t = query.get('t', [''])[0]
             req_sign = query.get('sign', [''])[0]
             
@@ -170,32 +173,33 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 return
             
             # [防重放 2] Nonce 精确核对 (拦截 60 秒内的 MITM 并发重放洗劫)
-            clean_used_signs()
-            if req_sign in USED_SIGNS:
-                self.send_response(401)
-                self.end_headers()
-                self.wfile.write(b"401 Unauthorized: Replay Attack Detected\n")
-                return
+            with NONCE_LOCK:
+                clean_used_signs()
+                if req_sign in USED_SIGNS:
+                    self.send_response(401)
+                    self.end_headers()
+                    self.wfile.write(b"401 Unauthorized: Replay Attack Detected\n")
+                    return
                 
-            # [身份核验] 数据完整性校验，使用 compare_digest 免疫时序探测攻击
-            msg = f"{req_path}:{req_t}".encode('utf-8')
-            expected_sign = hmac.new(AUTH_TOKEN.encode('utf-8'), msg, hashlib.sha256).hexdigest()
-            
-            if not hmac.compare_digest(expected_sign, req_sign):
-                self.send_response(401)
-                self.end_headers()
-                self.wfile.write(b"401 Unauthorized: Signature Mismatch\n")
-                return
-            
-            # [Nonce 缓存大小保护] 防止内存耗尽攻击
-            if len(USED_SIGNS) >= MAX_NONCE_CACHE:
-                self.send_response(429)
-                self.end_headers()
-                self.wfile.write(b"429 Too Many Requests: Nonce cache full\n")
-                return
-            
-            # 鉴权通过，登记 Nonce 载荷
-            USED_SIGNS[req_sign] = current_time
+                # [身份核验] 数据完整性校验，使用 compare_digest 免疫时序探测攻击
+                msg = f"{req_path}:{req_t}".encode('utf-8')
+                expected_sign = hmac.new(AUTH_TOKEN.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+                
+                if not hmac.compare_digest(expected_sign, req_sign):
+                    self.send_response(401)
+                    self.end_headers()
+                    self.wfile.write(b"401 Unauthorized: Signature Mismatch\n")
+                    return
+                
+                # [Nonce 缓存大小保护] 防止内存耗尽攻击
+                if len(USED_SIGNS) >= MAX_NONCE_CACHE:
+                    self.send_response(429)
+                    self.end_headers()
+                    self.wfile.write(b"429 Too Many Requests: Nonce cache full\n")
+                    return
+                
+                # 鉴权通过，登记 Nonce 载荷
+                USED_SIGNS[req_sign] = current_time
 
         # ==========================================================
         # [指令分发] 模块级业务路由矩阵 (精确匹配策略)
@@ -513,6 +517,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 
                 # 将升级逻辑进行 Base64 深层封装，免疫 Popen 或 Systemd 传递带来的指令注入风险
                 ota_script = f"""
+trap 'rm -f -- "$0"' EXIT
 export SILENT_OTA="true"
 TMP_FILE="/tmp/ota_agent.sh"
 curl -fsSL {repo_url}/core/install.sh -o "$TMP_FILE"
@@ -527,7 +532,7 @@ if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
         echo "OTA Integrity Failed: SHA256 mismatch (expected: {ota_expected_sha256}, got: $DOWNLOADED_HASH)" > /opt/ip_sentinel/logs/ota_upgrade.log
     fi
 fi
-if [ "$VERIFY_PASS" = true ] && bash -n "$TMP_FILE"; then
+	if [ "$VERIFY_PASS" = true ] && bash -n "$TMP_FILE"; then
     bash "$TMP_FILE" > /opt/ip_sentinel/logs/ota_upgrade.log 2>&1
 else
     if [ "$VERIFY_PASS" = true ]; then
@@ -536,6 +541,7 @@ else
         echo "OTA Checksum Failed: Script corrupted" > /opt/ip_sentinel/logs/ota_upgrade.log
     fi
 fi
+rm -f -- "$0"
 """
                 ota_script_b64 = base64.b64encode(ota_script.encode('utf-8')).decode('utf-8')
                 
@@ -547,7 +553,8 @@ fi
                         f.write(decoded_script)
                         f.flush()
                         os_mod.chmod(f.name, 0o700)
-                    subprocess.Popen(["nohup", "bash", f.name],
+                        script_path = f.name
+                    subprocess.Popen(["nohup", "bash", script_path],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
                 except Exception as e:
                     print(f"OTA script execution failed: {e}")
@@ -570,15 +577,21 @@ import socket
 # ----------------------------------------------------------
 class DualStackServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
-    max_threads = 50
     daemon_threads = True
+    _request_sem = threading.BoundedSemaphore(50)
     
     def process_request(self, request, client_address):
         # [P1-006] 线程数上限保护，防止资源耗尽
-        if threading.active_count() > self.max_threads:
+        if not self._request_sem.acquire(blocking=False):
             request.close()
             return
         super().process_request(request, client_address)
+    
+    def finish_request(self, request, client_address):
+        try:
+            super().finish_request(request, client_address)
+        finally:
+            self._request_sem.release()
     
     def server_bind(self):
         # [核心魔改] 强行解除 Linux/Unix 的 IPv6 独占锁
