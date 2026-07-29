@@ -696,6 +696,9 @@ if [ "$UPGRADE_MODE" == "false" ]; then
     LANG_PARAMS=$(jq -r '.google_module.lang_params' "$REGION_JSON_FILE")
     VALID_URL_SUFFIX=$(jq -r '.google_module.valid_url_suffix' "$REGION_JSON_FILE")
 
+    # 确保 HMAC_SECRET 存在（首次安装时生成，升级时保留旧值）
+    HMAC_SECRET="${HMAC_SECRET:-$(openssl rand -hex 32)}"
+
     cat > "$CONFIG_FILE" << EOF
 # IP-Sentinel 本地固化配置 (生成时间: $(date '+%Y-%m-%d %H:%M:%S'))
 AGENT_VERSION="$TARGET_VERSION"
@@ -713,6 +716,7 @@ ENABLE_TRUST="$ENABLE_TRUST"
 TG_TOKEN="$TG_TOKEN"
 TG_API_URL="$TG_API_URL"
 CHAT_ID="$CHAT_ID"
+HMAC_SECRET="$HMAC_SECRET"
 AGENT_PORT="$AGENT_PORT"
 INSTALL_DIR="$INSTALL_DIR"
 LOG_FILE="${INSTALL_DIR}/logs/sentinel.log"
@@ -827,6 +831,13 @@ if [ "$UPGRADE_MODE" == "true" ]; then
         ENABLE_OTA="false"
     else
         ENABLE_OTA=$(grep "^ENABLE_OTA=" "$CONFIG_FILE" | cut -d'"' -f2)
+    fi
+
+    if ! grep -q "^HMAC_SECRET=" "$CONFIG_FILE"; then
+        HMAC_SECRET="${HMAC_SECRET:-$(openssl rand -hex 32)}"
+        echo "HMAC_SECRET=\"$HMAC_SECRET\"" >> "$CONFIG_FILE"
+    else
+        HMAC_SECRET=$(grep "^HMAC_SECRET=" "$CONFIG_FILE" | cut -d'"' -f2)
     fi
 fi
 
