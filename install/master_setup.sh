@@ -180,7 +180,7 @@ EOF
             echo "IS_OFFICIAL_GATEWAY=\"false\"" >> "${MASTER_DIR}/master.conf"
         fi
         if ! grep -q "^ENABLE_MASTER_OTA=" "${MASTER_DIR}/master.conf"; then
-            echo "ENABLE_MASTER_OTA=\"false\"" >> "${MASTER_DIR}/master.conf"
+            echo "ENABLE_MASTER_OTA=\"true\"" >> "${MASTER_DIR}/master.conf"
         fi
         if ! grep -q "^MASTER_NODE_NAME=" "${MASTER_DIR}/master.conf"; then
             MASTER_IP=$( (curl -4 -s -m 3 api.ip.sb/ip || curl -4 -s -m 3 ifconfig.me) 2>/dev/null | tr -d '[:space:]' )
