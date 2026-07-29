@@ -34,25 +34,64 @@ fi
 PROBE_ARGS+=("-${DYNAMIC_IP_PREF}")
 
 # ----------------------------------------------------------
-# 2. 智能拉取引擎 (防 RCE 与 文件防伪校验)
+# 2. 智能拉取引擎 (防供应链投毒 + SHA256 完整性校验)
 # ----------------------------------------------------------
 PROBE_SCRIPT="/opt/ip_sentinel/core/ip_probe.sh"
+PROBE_HASH_FILE="${PROBE_SCRIPT%/*}/.probe_hash"
 
-# [完整性校验] 验证本地残留脚本是否损坏 (防止因被墙或拦截导致本地缓存了无效的 HTML 报错页)
-if [ -f "$PROBE_SCRIPT" ] && ! grep -q "xykt" "$PROBE_SCRIPT" 2>/dev/null; then
-    rm -f "$PROBE_SCRIPT"
+# 加载已锁定的预期哈希
+if [ -f "$PROBE_HASH_FILE" ]; then
+    PROBE_EXPECTED_HASH=$(cat "$PROBE_HASH_FILE" | tr -d '[:space:]')
 fi
 
-if [ ! -s "$PROBE_SCRIPT" ]; then
-    # [首选防线] 严格遵守从官方主干拉取，捍卫纯净底线
-    curl -sL -m 10 "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$PROBE_SCRIPT" 2>/dev/null
-    
-    # [文件防伪校验] 剔除因解析失效返回的污染文本，并降级至双栈 CDN 节点兜底
-    if ! grep -q "xykt" "$PROBE_SCRIPT" 2>/dev/null; then
-        rm -f "$PROBE_SCRIPT" 2>/dev/null
-        curl -sL -m 15 "https://IP.Check.Place" -o "$PROBE_SCRIPT" 2>/dev/null
+# [完整性校验] 验证本地残留脚本的 SHA256 哈希 (防止因被墙或拦截导致本地缓存了无效的 HTML 报错页)
+verify_probe_hash() {
+    local script_path="$1"
+    if [ ! -f "$script_path" ]; then
+        return 1
     fi
-    chmod +x "$PROBE_SCRIPT" 2>/dev/null
+    if [ -z "$PROBE_EXPECTED_HASH" ]; then
+        # 首次运行或哈希未锁定时，若脚本包含 "xykt" 标记则信任并锁定哈希
+        if grep -q "xykt" "$script_path" 2>/dev/null; then
+            local actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
+            echo "$actual_hash" > "$PROBE_HASH_FILE"
+            PROBE_EXPECTED_HASH="$actual_hash"
+            return 0
+        fi
+        return 1
+    fi
+    local actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
+    if [ "$actual_hash" = "$PROBE_EXPECTED_HASH" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# 检查本地已有脚本是否有效
+if ! verify_probe_hash "$PROBE_SCRIPT"; then
+    rm -f "$PROBE_SCRIPT" "$PROBE_HASH_FILE" 2>/dev/null
+fi
+
+if [ ! -s "$PROBE_SCRIPT" ] || [ ! -f "$PROBE_HASH_FILE" ]; then
+    # [首选防线] 从官方主干拉取
+    curl -sL -m 10 "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$PROBE_SCRIPT" 2>/dev/null
+
+    # [哈希锁定] 验证并锁定探针哈希
+    if verify_probe_hash "$PROBE_SCRIPT"; then
+        chmod +x "$PROBE_SCRIPT" 2>/dev/null
+    else
+        rm -f "$PROBE_SCRIPT" 2>/dev/null
+        # [容灾降级] 从备用 CDN 拉取
+        curl -sL -m 15 "https://IP.Check.Place" -o "$PROBE_SCRIPT" 2>/dev/null
+
+        if verify_probe_hash "$PROBE_SCRIPT"; then
+            chmod +x "$PROBE_SCRIPT" 2>/dev/null
+        else
+            rm -f "$PROBE_SCRIPT" 2>/dev/null
+            echo "ERROR: 探针脚本拉取失败或哈希校验未通过，无法执行质量检测" >&2
+            exit 1
+        fi
+    fi
 fi
 
 # ==========================================================

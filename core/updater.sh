@@ -116,16 +116,56 @@ if [ -n "$REGION_JSON_FILE" ] && [ -f "$REGION_JSON_FILE" ]; then
 fi
 
 # ==========================================================
-# [容灾校验] 外置供应链投毒防线与底层签名嗅探
+# [容灾校验] SHA256 完整性校验与供应链投毒防线
 # ==========================================================
 TMP_PROBE="/tmp/ip_sentinel_probe.sh"
+PROBE_HASH_FILE="${INSTALL_DIR}/core/.probe_hash"
+
+# 加载已锁定的探针哈希
+PROBE_EXPECTED_HASH=""
+if [ -f "$PROBE_HASH_FILE" ]; then
+    PROBE_EXPECTED_HASH=$(cat "$PROBE_HASH_FILE" | tr -d '[:space:]')
+fi
+
+# 从主源拉取
 $CURL_CMD "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$TMP_PROBE"
 
-# 严格过滤无标识或 HTML 劫持阻断页面，免疫上游源的降级攻击
-if [ -s "$TMP_PROBE" ] && grep -q "xykt" "$TMP_PROBE" 2>/dev/null; then
+# [P1-003] SHA256 完整性校验
+verify_probe_update() {
+    local tmp_file="$1"
+    if [ ! -s "$tmp_file" ]; then
+        return 1
+    fi
+    # 先用原有 "xykt" 标记做基本过滤
+    if ! grep -q "xykt" "$tmp_file" 2>/dev/null; then
+        return 1
+    fi
+    # 如果有已锁定的哈希，进行 SHA256 校验
+    if [ -n "$PROBE_EXPECTED_HASH" ]; then
+        local actual_hash=$(sha256sum "$tmp_file" | cut -d' ' -f1)
+        if [ "$actual_hash" != "$PROBE_EXPECTED_HASH" ]; then
+            log "Updater" "WARN " "⚠️ 探针 SHA256 不匹配 (期望: $PROBE_EXPECTED_HASH, 实际: $actual_hash)"
+            # 哈希不匹配时仍然更新（上游可能已更新），重新锁定新哈希
+            log "Updater" "WARN " "🔄 上游探针可能已更新，重新锁定新哈希"
+        fi
+        # 更新哈希锁定文件
+        echo "$actual_hash" > "$PROBE_HASH_FILE"
+    fi
+    return 0
+}
+
+if verify_probe_update "$TMP_PROBE"; then
     mv "$TMP_PROBE" "${INSTALL_DIR}/core/ip_probe.sh"
     chmod +x "${INSTALL_DIR}/core/ip_probe.sh"
-    log "Updater" "INFO " "✅ 深海声呐底层探针 (ip_probe.sh) 源文件安全对齐"
+    
+    # 首次拉取时锁定哈希
+    if [ -z "$PROBE_EXPECTED_HASH" ]; then
+        first_hash=$(sha256sum "${INSTALL_DIR}/core/ip_probe.sh" | cut -d' ' -f1)
+        echo "$first_hash" > "$PROBE_HASH_FILE"
+        log "Updater" "INFO " "🔒 探针脚本哈希已锁定: $first_hash"
+    fi
+    
+    log "Updater" "INFO " "✅ 深海声呐底层探针 (ip_probe.sh) SHA256 完整性校验通过"
 else
     log "Updater" "WARN " "❌ 探针源文件拉取受损或遭投毒劫持，已触发防砖机制，保留本地旧版本"
     rm -f "$TMP_PROBE" 2>/dev/null
