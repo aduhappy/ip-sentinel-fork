@@ -520,7 +520,12 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
 trap 'rm -f -- "$0"' EXIT
 export SILENT_OTA="true"
 TMP_FILE="/tmp/ota_agent.sh"
-curl -fsSL {repo_url}/core/install.sh -o "$TMP_FILE"
+if ! curl -fsSL --connect-timeout 10 --retry 2 {repo_url}/core/install.sh -o "$TMP_FILE" 2>/dev/null; then
+    MSG=$(echo '{err_msg_b64}' | base64 -d)
+    curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
+    echo "OTA Download Failed: Could not fetch install.sh" >> /opt/ip_sentinel/logs/ota_upgrade.log
+    exit 1
+fi
 # [P1-008] OTA 完整性校验：SHA256 哈希对比
 VERIFY_PASS=true
 if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
@@ -532,7 +537,7 @@ if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
         echo "OTA Integrity Failed: SHA256 mismatch (expected: {ota_expected_sha256}, got: $DOWNLOADED_HASH)" > /opt/ip_sentinel/logs/ota_upgrade.log
     fi
 fi
-	if [ "$VERIFY_PASS" = true ] && bash -n "$TMP_FILE"; then
+	if [ "$VERIFY_PASS" = true ] && [ -s "$TMP_FILE" ] && bash -n "$TMP_FILE"; then
     bash "$TMP_FILE" > /opt/ip_sentinel/logs/ota_upgrade.log 2>&1
 else
     if [ "$VERIFY_PASS" = true ]; then
