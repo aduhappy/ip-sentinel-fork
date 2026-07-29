@@ -100,29 +100,44 @@ import urllib.request
 import hmac
 import hashlib
 import time
+import threading
+from collections import OrderedDict
 
 PORT = int(sys.argv[1])
 
 # ----------------------------------------------------------
 # [防御矩阵] Nonce 缓存池防重放攻击 (Replay Attack)
 # ----------------------------------------------------------
-USED_SIGNS = {}
+MAX_NONCE_CACHE = 100000
+USED_SIGNS = OrderedDict()
+
 def clean_used_signs():
     now = time.time()
-    # [安全策略] 滑动清理超 65 秒过期签名，保障内存健康
-    expired = [s for s, t in USED_SIGNS.items() if now - t > 65]
-    for s in expired:
-        del USED_SIGNS[s]
+    # [安全策略] 滑动窗口清理过期条目，性能优化为从头检查（OrderedDict FIFO 特性）
+    while USED_SIGNS:
+        s, t = next(iter(USED_SIGNS.items()))
+        if now - t > 65:
+            del USED_SIGNS[s]
+        else:
+            break
 
-# [权限鉴权] 提取 CHAT_ID 作为 PSK 预共享密钥
+# [权限鉴权] 提取 HMAC_SECRET 作为 PSK 预共享密钥（双轨兼容：无 HMAC_SECRET 时回退至 CHAT_ID）
 AUTH_TOKEN = ""
 if os.path.exists('/opt/ip_sentinel/config.conf'):
     with open('/opt/ip_sentinel/config.conf', 'r') as f:
         for line in f:
             line = line.strip()
-            if line.startswith('CHAT_ID='):
+            if line.startswith('HMAC_SECRET='):
                 AUTH_TOKEN = line.split('=', 1)[1].strip('"\'')
                 break
+    # 向后兼容：无 HMAC_SECRET 时使用 CHAT_ID
+    if not AUTH_TOKEN:
+        with open('/opt/ip_sentinel/config.conf', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('CHAT_ID='):
+                    AUTH_TOKEN = line.split('=', 1)[1].strip('"\'')
+                    break
 
 class AgentHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -170,6 +185,13 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(401)
                 self.end_headers()
                 self.wfile.write(b"401 Unauthorized: Signature Mismatch\n")
+                return
+            
+            # [Nonce 缓存大小保护] 防止内存耗尽攻击
+            if len(USED_SIGNS) >= MAX_NONCE_CACHE:
+                self.send_response(429)
+                self.end_headers()
+                self.wfile.write(b"429 Too Many Requests: Nonce cache full\n")
                 return
             
             # 鉴权通过，登记 Nonce 载荷
@@ -439,7 +461,6 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(b"Action Accepted: trigger_ota\n")
                 
                 # [防线/容灾] 逃逸 Cgroup 隔离沙盒，并引入前置脚本语法校验防砖
-                import shutil
                 import base64
                 repo_url = "https://raw.githubusercontent.com/aduhappy/IP-Sentinel/hardened"
                 if os.path.exists('/opt/ip_sentinel/core/install.sh'):
@@ -500,6 +521,16 @@ import socket
 # ----------------------------------------------------------
 class DualStackServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
+    max_threads = 50
+    daemon_threads = True
+    
+    def process_request(self, request, client_address):
+        # [P1-006] 线程数上限保护，防止资源耗尽
+        if threading.active_count() > self.max_threads:
+            request.close()
+            return
+        super().process_request(request, client_address)
+    
     def server_bind(self):
         # [核心魔改] 强行解除 Linux/Unix 的 IPv6 独占锁
         # 实现一个 Socket 对象同时接管 IPv4 (0.0.0.0) 和 IPv6 (::) 的全域监听防漏接机制
