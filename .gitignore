@@ -1,2 +1,4 @@
 node_modules/
 .zcode/
+fork/
+audit/
