@@ -2,7 +2,7 @@
 
 ![Agent Installs](https://img.shields.io/endpoint?url=https://ip-sentinel-count.samanthaestime296.workers.dev/stats/agent)
 ![Master Commands](https://img.shields.io/endpoint?url=https://ip-sentinel-count.samanthaestime296.workers.dev/stats/master)
-![License](https://img.shields.io/github/license/hotyue/IP-Sentinel)
+![License](https://img.shields.io/github/license/aduhappy/ip-sentinel-fork)
 
 > **一个极度轻量、零感知、支持中枢遥控的 VPS IP 自动化养护与区域纠偏引擎。**
 > **💡 提示：如果本项目提升了您的节点稳定性，请点击右上角点亮 🌟 Star！您的支持是我们持续研发和维护指纹库的核心动力。**
@@ -26,16 +26,17 @@
 **—— 💎 骨干基建特征 ——**
 - 🏭 **全自动云端军工厂 (CI/CD Data Factory)**：依托 GitHub Actions 构建双轨无人值守流水线。**每月 1 日**批量锻造 4000+ 带有绝对物理分区的原生终端指纹库；**每日凌晨 (UTC)** 实时抓取全球各战区 Google 真实热搜榜单与本土骨干新闻 RSS。为前线舰队源源不断地输送最鲜活的伪装弹药。
 - 🔒 **叹息之墙 (Zero-Trust HMAC)**：底层通讯引入 时间戳 + HMAC-SHA256 军用级动态签名。指令有效期仅 60 秒（阅后即焚），未授权请求直接触发系统级 403 物理熔断，彻底免疫中间人抓包与重放攻击。
+- 🔒 **零信任安全体系 (Zero-Trust Security)**：全栈 13 项安全加固。SSRF 保护采用 Python `ipaddress` 库精准验证；HMAC-SHA256 军用级动态签名 + Nonce 防重放 + Nonce 缓存线程锁；全量命令注入防护（`os.system`→`subprocess`）；OTA 双端 SHA256 完整性校验与升级失败自动回退；证书固定验证移除 `--insecure`；探针脚本哈希锁定；Bash word splitting 数组化防御。
 - ☁️ **云端中枢 (Public Master)**：官方公共机器人 [@OmniBeacon_bot](https://t.me/OmniBeacon_bot) ，新手免自建，一键接入极速入伍！同时支持硬核极客私有化 SQLite 分布式部署。
 
 ## 📂 项目架构 (Modular Monorepo)
 
-本项目已迈入 v4.3.0 现代工程时代，采用高内聚的模块化与“冷热数据分离”双重架构：
+本项目已迈入 v4.3.3 现代工程时代，采用高内聚的模块化与“冷热数据分离”双重架构：
 
 ```text
 📦 IP-Sentinel
  ┣ 📂 .github/workflows/      # 🏭 自动化兵工厂：每月定时触发指纹生成的 CI/CD 流水线
- ┣ 📂 install/                # 🧩 [v4.3.0] 安装期编排引擎：模块化解耦的环境判定、交互层与网络防线
+ ┣ 📂 install/                # 🧩 [v4.3.3] 安装期编排引擎：模块化解耦的环境判定、交互层与网络防线
  ┣ 📜 install.sh              # 🚀 Agent 引导程序：以防污染单行指令调用下层模块
  ┣ 📂 master/                 # 🧠 司令部：SQLite 存储、TG 监听与 Webhook 调度 (含专属引导程序)
  ┣ 📂 core/                   # 🛡️ 边缘哨兵：Webhook 守护进程、多维交叉探针与原子养护循环
@@ -45,7 +46,7 @@
  ┃  ┣ 📂 regions/             # 🧊 冷数据：按 [国家/省州/城市] 深度细分的 LBS 锚点
  ┃  ┣ 📂 keywords/            # 🔥 热数据：按国家归类的动态搜索词库 (OTA 自动更新)
  ┃  ┗ 📜 user_agents.txt      # 🔥 热数据：由兵工厂每月锻造的绝对坐标专属设备库
- ┣ 📜 version.txt             # 🚩 双端版本信标：Agent/Master 独立解耦的 KV 环境配置
+ ┣ 📜 version.txt             # 🚩 双端版本信标与探针哈希锚点：Agent/Master 独立解耦的 KV 环境配置
  ┗ 📂 telemetry/              # 👁️‍🗨️ 玻璃房计划：Cloudflare Workers 透明计数器网关源码
 ```
 
@@ -62,12 +63,12 @@
 - **部署 Master (中枢大脑)**：找一台 VPS 作为司令部（仅需部署一台,可以与Agent装在同一台VPS），执行：
 - [官方部署教程](https://blog.iot-architect.com/engineering-practice/ip-sentinel-master-deployment-guide/)
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/hotyue/IP-Sentinel/main/master/install_master.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/master/install_master.sh)"
 ```
 - 部署 Agent (边缘哨兵)：在需要养护的机器上执行 Agent 脚本，安装时选择私有独立中枢，并分别输入您自建机器人的 [Token](https://blog.iot-architect.com/engineering-practice/create-private-telegram-bot-via-botfather) 以及您的个人 [Chat ID](https://blog.iot-architect.com/engineering-practice/get-telegram-personal-id-via-userinfobot) ：
 - [官方部署教程](https://blog.iot-architect.com/engineering-practice/ip-sentinel-installation-and-upgrade-guide/)
 ```Bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/hotyue/IP-Sentinel/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/install.sh)"
 ```
 - 激活节点：安装完成后，您的手机会收到一条 #REGISTER# 注册暗号，将其转发给您自己的机器人即可完成编队入库。
 
@@ -81,7 +82,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hotyue/IP-Sentinel/main/
 - 部署 Agent：在目标 VPS 上执行以下指令，安装过程中选择官方公共网关，并输入您的 Chat ID：
 - [官方部署教程](https://blog.iot-architect.com/engineering-practice/deploy-ip-sentinel-official-gateway/)
 ```Bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/hotyue/IP-Sentinel/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/install.sh)"
 ```
 - 激活节点：同上，将收到的暗号转发给官方机器人即可。
 
@@ -116,7 +117,7 @@ bash /opt/ip_sentinel/core/uninstall.sh
 *(注意：该分支仅作基础维护，不享受新功能迭代，请尽可能升级你的系统)*
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/hotyue/IP-Sentinel/legacy/core/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/core/install.sh)
 ```
 
 ## 📡 战术联络 (Community)
@@ -128,8 +129,8 @@ bash <(curl -sL https://raw.githubusercontent.com/hotyue/IP-Sentinel/legacy/core
 
 **🌟 感谢以下所有为 IP-Sentinel 添砖加瓦的指挥官们！** 你们的每一次 PR 都在让这艘战舰的全球雷达覆盖得更广。
 
-<a href="https://github.com/hotyue/IP-Sentinel/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=hotyue/IP-Sentinel" alt="Contributors" />
+<a href="https://github.com/aduhappy/ip-sentinel-fork/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=aduhappy/ip-sentinel-fork" alt="Contributors" />
 </a>
 
 如果你想为项目增加新的节点区域（例如德国、英国、大洋洲等），或者提供更丰富的本土化搜索词库，非常欢迎提交 Pull Request！
@@ -154,4 +155,4 @@ bash <(curl -sL https://raw.githubusercontent.com/hotyue/IP-Sentinel/legacy/core
 
 
 ### 📈 Stargazers over time
-![Star History](https://raw.githubusercontent.com/hotyue/IP-Sentinel/main/data/star_history.svg?v=1)
+![Star History](https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/data/star_history.svg?v=1)
