@@ -628,7 +628,7 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                     CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
                     
                     # [安全防御] MOD_NAME 白名单验证
-                    if [[ "$MOD_NAME" != "google" && "$MOD_NAME" != "trust" && "$MOD_NAME" != "ota" ]]; then
+                    if [[ "$MOD_NAME" != "google" && "$MOD_NAME" != "trust" ]]; then
                         send_msg "$CHAT_ID" "⛔ 无效的模块名称。"
                         continue
                     fi
