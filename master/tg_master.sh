@@ -415,10 +415,17 @@ except:
                         send_msg "$CHAT_ID" "⏳ 正在下载重构图纸，司令部即将进入静默重启..."
                     fi
 
-                    curl -fsSL "${REPO_RAW_URL}/master/install_master.sh" -o "/tmp/install_master.sh"
+                    # [P1-008] Master OTA 完整性校验：先下载到临时文件计算 SHA256
+                    MASTER_OTA_TMP="/tmp/install_master.sh"
+                    MASTER_OTA_HASH=""
+                    curl -fsSL --connect-timeout 10 --retry 2 "${REPO_RAW_URL}/master/install_master.sh" -o "$MASTER_OTA_TMP" 2>/dev/null
+                    if [ -s "$MASTER_OTA_TMP" ]; then
+                        MASTER_OTA_HASH=$(sha256sum "$MASTER_OTA_TMP" | cut -d' ' -f1)
+                        send_msg "$CHAT_ID" "🔒 升级包指纹: \`${MASTER_OTA_HASH}\`" 2>/dev/null
+                    fi
                     
                     # [OTA 防砖机制] 严格校验脚本语法完整性，防止传输中断导致司令部失联
-                    if ! bash -n "/tmp/install_master.sh" >/dev/null 2>&1; then
+                    if [ ! -s "$MASTER_OTA_TMP" ] || ! bash -n "$MASTER_OTA_TMP" >/dev/null 2>&1; then
                         if [ -n "$MSG_ID" ]; then
                             edit_msg "$CHAT_ID" "$MSG_ID" "❌ OTA 传输受损：脚本下载不完整，已触发防砖熔断，升级取消！"
                         else
@@ -427,14 +434,14 @@ except:
                         continue
                     fi
                     
-                    chmod +x "/tmp/install_master.sh"
+                    chmod +x "$MASTER_OTA_TMP"
                     
                     if command -v systemd-run >/dev/null 2>&1; then
-                        systemd-run --quiet --no-block /bin/bash -c "export SILENT_MASTER_OTA='true'; export OTA_CHAT_ID='$CHAT_ID'; bash /tmp/install_master.sh"
+                        systemd-run --quiet --no-block /bin/bash -c "export SILENT_MASTER_OTA='true'; export OTA_CHAT_ID='$CHAT_ID'; bash $MASTER_OTA_TMP"
                     else
                         export SILENT_MASTER_OTA="true"
                         export OTA_CHAT_ID="$CHAT_ID"
-                        nohup bash /tmp/install_master.sh >/dev/null 2>&1 & disown
+                        nohup bash $MASTER_OTA_TMP >/dev/null 2>&1 & disown
                     fi
                     sleep 10
                     ;;
