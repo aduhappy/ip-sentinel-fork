@@ -267,7 +267,7 @@ else
         fi
 
         # 组装注册指令
-        REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}"
+        REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${AGENT_VERSION:-}"
 
         echo -e "\n📤 正在向 Telegram 推送注册指令..."
         TEXT_MSG="✨ *IP-Sentinel 重新发送注册指令！*
@@ -880,6 +880,13 @@ pkill -9 -f "tg_report.sh" >/dev/null 2>&1 || true
 pkill -9 -f "updater.sh" >/dev/null 2>&1 || true
 pkill -9 -f "sentinel_scheduler.sh" >/dev/null 2>&1 || true
 
+# 备份旧核心以便回退
+if [ -d "${INSTALL_DIR}/core" ]; then
+    echo "⏳ 正在备份旧版核心引擎到 core.bak..."
+    rm -rf "${INSTALL_DIR}/core.bak" 2>/dev/null
+    cp -a "${INSTALL_DIR}/core" "${INSTALL_DIR}/core.bak"
+fi
+
 rm -rf "${INSTALL_DIR}/core" 2>/dev/null
 mv "$TMP_CORE" "${INSTALL_DIR}/core"
 chmod +x ${INSTALL_DIR}/core/*.sh
@@ -1007,6 +1014,37 @@ EOF
         systemctl daemon-reload
         systemctl enable --now ip-sentinel-report.timer
         systemctl enable --now ip-sentinel-agent-daemon.service
+
+        # 验证新引擎启动状态，失败则自动回退到 core.bak
+        sleep 3
+        if [ -d "${INSTALL_DIR}/core.bak" ]; then
+            if ! pgrep -f "agent_daemon.sh" > /dev/null 2>&1 && ! pgrep -f "webhook.py" > /dev/null 2>&1; then
+                echo -e "\033[31m❌ 新引擎启动失败，自动回退到旧版核心...\033[0m"
+                rm -rf "${INSTALL_DIR}/core" 2>/dev/null
+                mv "${INSTALL_DIR}/core.bak" "${INSTALL_DIR}/core"
+                chmod +x ${INSTALL_DIR}/core/*.sh
+
+                # 重启服务
+                if is_systemd; then
+                    systemctl enable --now ip-sentinel-agent-daemon.service >/dev/null 2>&1 || true
+                else
+                    nohup bash "${INSTALL_DIR}/core/agent_daemon.sh" >/dev/null 2>&1 &
+                fi
+
+                sleep 2
+                if pgrep -f "agent_daemon.sh" > /dev/null 2>&1 || pgrep -f "webhook.py" > /dev/null 2>&1; then
+                    echo -e "\033[32m✅ 旧版引擎回退成功，系统已恢复。\033[0m"
+                    # 发送 TG 通知
+                    curl -s -m 10 -X POST "${TG_API_URL}" -d "chat_id=${CHAT_ID}" -d "text=⚠️ **OTA 升级失败，已自动回退到旧版本**%0A📍 节点: \`${NODE_NAME}\`%0A📌 原因: 新引擎启动超时无响应" > /dev/null 2>&1
+                else
+                    echo -e "\033[31m❌ 旧版引擎回退也失败，请手动 SSH 介入修复！\033[0m"
+                fi
+            else
+                # 新引擎启动成功，删除备份
+                rm -rf "${INSTALL_DIR}/core.bak" 2>/dev/null
+                echo -e "\033[32m✅ 新引擎启动验证通过，清理备份文件。\033[0m"
+            fi
+        fi
     fi
     else
         echo "💡 未检测到 Systemd，正在配置备用调度器 (兼容 Alpine/OpenRC)..."
@@ -1062,6 +1100,28 @@ EOF
             [ -n "$PUBLIC_IP" ] && echo "$PUBLIC_IP" > "${INSTALL_DIR}/core/.last_ip"
             nohup bash ${INSTALL_DIR}/core/sentinel_scheduler.sh >/dev/null 2>&1 &
             
+            # 验证新引擎启动状态，失败则自动回退到 core.bak
+            sleep 3
+            if [ -d "${INSTALL_DIR}/core.bak" ]; then
+                if ! pgrep -f "agent_daemon.sh" > /dev/null 2>&1 && ! pgrep -f "webhook.py" > /dev/null 2>&1; then
+                    echo -e "\033[31m❌ 新引擎启动失败，自动回退到旧版核心...\033[0m"
+                    rm -rf "${INSTALL_DIR}/core" 2>/dev/null
+                    mv "${INSTALL_DIR}/core.bak" "${INSTALL_DIR}/core"
+                    chmod +x ${INSTALL_DIR}/core/*.sh
+                    nohup bash ${INSTALL_DIR}/core/sentinel_scheduler.sh >/dev/null 2>&1 &
+                    sleep 2
+                    if pgrep -f "agent_daemon.sh" > /dev/null 2>&1 || pgrep -f "webhook.py" > /dev/null 2>&1; then
+                        echo -e "\033[32m✅ 旧版引擎回退成功，系统已恢复。\033[0m"
+                        curl -s -m 10 -X POST "${TG_API_URL}" -d "chat_id=${CHAT_ID}" -d "text=⚠️ **OTA 升级失败，已自动回退到旧版本**%0A📍 节点: \`${NODE_NAME}\`%0A📌 原因: 新引擎启动超时无响应" > /dev/null 2>&1
+                    else
+                        echo -e "\033[31m❌ 旧版引擎回退也失败，请手动 SSH 介入修复！\033[0m"
+                    fi
+                else
+                    rm -rf "${INSTALL_DIR}/core.bak" 2>/dev/null
+                    echo -e "\033[32m✅ 新引擎启动验证通过，清理备份文件。\033[0m"
+                fi
+            fi
+            
         else
             crontab -l 2>/dev/null | grep -v "ip_sentinel" > "${SECURE_TMP}/cron_backup" || true
             echo "*/20 * * * * ${INSTALL_DIR}/core/runner.sh >/dev/null 2>&1" >> "${SECURE_TMP}/cron_backup"
@@ -1084,6 +1144,28 @@ EOF
                 echo "* * * * * pgrep -f 'webhook.py' >/dev/null || nohup bash ${INSTALL_DIR}/core/agent_daemon.sh >/dev/null 2>&1 &" >> "${SECURE_TMP}/cron_backup"
                 
                 nohup bash "${INSTALL_DIR}/core/agent_daemon.sh" >/dev/null 2>&1 &
+
+                # 验证新引擎启动状态，失败则自动回退到 core.bak
+                sleep 3
+                if [ -d "${INSTALL_DIR}/core.bak" ]; then
+                    if ! pgrep -f "agent_daemon.sh" > /dev/null 2>&1 && ! pgrep -f "webhook.py" > /dev/null 2>&1; then
+                        echo -e "\033[31m❌ 新引擎启动失败，自动回退到旧版核心...\033[0m"
+                        rm -rf "${INSTALL_DIR}/core" 2>/dev/null
+                        mv "${INSTALL_DIR}/core.bak" "${INSTALL_DIR}/core"
+                        chmod +x ${INSTALL_DIR}/core/*.sh
+                        nohup bash "${INSTALL_DIR}/core/agent_daemon.sh" >/dev/null 2>&1 &
+                        sleep 2
+                        if pgrep -f "agent_daemon.sh" > /dev/null 2>&1 || pgrep -f "webhook.py" > /dev/null 2>&1; then
+                            echo -e "\033[32m✅ 旧版引擎回退成功，系统已恢复。\033[0m"
+                            curl -s -m 10 -X POST "${TG_API_URL}" -d "chat_id=${CHAT_ID}" -d "text=⚠️ **OTA 升级失败，已自动回退到旧版本**%0A📍 节点: \`${NODE_NAME}\`%0A📌 原因: 新引擎启动超时无响应" > /dev/null 2>&1
+                        else
+                            echo -e "\033[31m❌ 旧版引擎回退也失败，请手动 SSH 介入修复！\033[0m"
+                        fi
+                    else
+                        rm -rf "${INSTALL_DIR}/core.bak" 2>/dev/null
+                        echo -e "\033[32m✅ 新引擎启动验证通过，清理备份文件。\033[0m"
+                    fi
+                fi
             fi
             
             [ -f "${SECURE_TMP}/cron_backup" ] && crontab "${SECURE_TMP}/cron_backup" >/dev/null 2>&1
@@ -1110,7 +1192,7 @@ EOF
 if [[ -n "$TG_TOKEN" ]] && [[ -n "$CHAT_ID" ]]; then
     
     # 注册报文中塞入多宿主弹匣 SAFE_COMM_IP
-    REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${SAFE_COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}"
+    REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${SAFE_COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${TARGET_VERSION}"
     
     if [ "$UPGRADE_MODE" == "true" ]; then
         OLD_VERSION=$(grep "^AGENT_VERSION=" "$CONFIG_FILE" | cut -d'"' -f2)
