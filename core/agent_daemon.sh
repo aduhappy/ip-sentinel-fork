@@ -431,6 +431,10 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
         # 路由 8: 零信任 OTA 远程热更新链路
         elif req_path == '/trigger_ota':
             try:
+                # [P1-008] OTA 完整性校验：从查询参数中提取期望的 SHA256 哈希
+                ota_params = urllib.parse.parse_qs(parsed.query)
+                ota_expected_sha256 = ota_params.get('sha256', [''])[0]
+                
                 config_mem = {}
                 config_path = '/opt/ip_sentinel/config.conf'
                 if os.path.exists(config_path):
@@ -470,7 +474,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                                 repo_url = line.split('=', 1)[1].strip('"\'')
                                 break
                 
-                err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本语法校验(bash -n)未通过，下载可能不完整。\n🚀 状态: 升级已取消，节点安全。"
+                err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256 or '未提供'}`\n🚀 状态: 升级已取消，节点安全。"
                 err_msg_b64 = base64.b64encode(err_msg.encode('utf-8')).decode('utf-8')
                 
                 tg_url = config_mem.get('TG_API_URL', '')
@@ -479,13 +483,27 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 # 将升级逻辑进行 Base64 深层封装，免疫 Popen 或 Systemd 传递带来的指令注入风险
                 ota_script = f"""
 export SILENT_OTA="true"
-curl -fsSL {repo_url}/core/install.sh -o /tmp/ota_agent.sh
-if bash -n /tmp/ota_agent.sh; then
-    bash /tmp/ota_agent.sh > /opt/ip_sentinel/logs/ota_upgrade.log 2>&1
+TMP_FILE="/tmp/ota_agent.sh"
+curl -fsSL {repo_url}/core/install.sh -o "$TMP_FILE"
+# [P1-008] OTA 完整性校验：SHA256 哈希对比
+VERIFY_PASS=true
+if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
+    DOWNLOADED_HASH=$(sha256sum "$TMP_FILE" | cut -d' ' -f1)
+    if [ "$DOWNLOADED_HASH" != "{ota_expected_sha256}" ]; then
+        VERIFY_PASS=false
+        MSG=$(echo '{err_msg_b64}' | base64 -d)
+        curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
+        echo "OTA Integrity Failed: SHA256 mismatch (expected: {ota_expected_sha256}, got: $DOWNLOADED_HASH)" > /opt/ip_sentinel/logs/ota_upgrade.log
+    fi
+fi
+if [ "$VERIFY_PASS" = true ] && bash -n "$TMP_FILE"; then
+    bash "$TMP_FILE" > /opt/ip_sentinel/logs/ota_upgrade.log 2>&1
 else
-    MSG=$(echo '{err_msg_b64}' | base64 -d)
-    curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
-    echo "OTA Checksum Failed: Script corrupted" > /opt/ip_sentinel/logs/ota_upgrade.log
+    if [ "$VERIFY_PASS" = true ]; then
+        MSG=$(echo '{err_msg_b64}' | base64 -d)
+        curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
+        echo "OTA Checksum Failed: Script corrupted" > /opt/ip_sentinel/logs/ota_upgrade.log
+    fi
 fi
 """
                 ota_script_b64 = base64.b64encode(ota_script.encode('utf-8')).decode('utf-8')

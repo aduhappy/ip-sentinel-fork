@@ -346,15 +346,30 @@ except:
                     ;;
 
                 "all_ota_execute")
-                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND enable_ota='true';")
-                    if [ -z "$NODE_DATA" ]; then
-                        send_msg "$CHAT_ID" "⚠️ 您名下暂无开启 OTA 权限的在线节点。"
-                    else
-                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
-                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT; do
-                            call_agent "$AIP" "$APORT" "/trigger_ota" > /dev/null &
-                            sleep 0.3
-                        done
+                    # [P1-008] OTA 升级前从仓库拉取 install.sh 并计算 SHA256 哈希
+                    OTA_VERIFY_HASH=""
+                    OTA_TMP_INSTALL="/tmp/ota_verify_install.sh"
+                    curl -fsSL --connect-timeout 10 --retry 2 "${REPO_RAW_URL}/core/install.sh" -o "$OTA_TMP_INSTALL" 2>/dev/null
+                    if [ -s "$OTA_TMP_INSTALL" ]; then
+                        OTA_VERIFY_HASH=$(sha256sum "$OTA_TMP_INSTALL" | cut -d' ' -f1)
+                        rm -f "$OTA_TMP_INSTALL"
+                    fi
+
+	                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND enable_ota='true';")
+	                    if [ -z "$NODE_DATA" ]; then
+	                        send_msg "$CHAT_ID" "⚠️ 您名下暂无开启 OTA 权限的在线节点。"
+	                    else
+	                        if [ -n "$OTA_VERIFY_HASH" ]; then
+	                            send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A🔒 升级包指纹: \`${OTA_VERIFY_HASH}\`%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
+	                        else
+	                            send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A⚠️ 警告：无法获取升级包哈希，OTA 将跳过完整性验证%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
+	                        fi
+	                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT AFP; do
+	                            local ota_suffix=""
+	                            [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
+	                            call_agent "$AIP" "$APORT" "/trigger_ota" "$ota_suffix" "$AFP" > /dev/null &
+	                            sleep 0.3
+	                        done
                     fi
                     ;;
 
@@ -399,27 +414,27 @@ except:
                     sleep 10
                     ;;
 
-                "all_reports")
-                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID';")
-                    if [ -z "$NODE_DATA" ]; then
-                        send_msg "$CHAT_ID" "⚠️ 您名下暂无在线节点。"
-                    else
-                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在召唤所有哨兵回传简报...**%0A*(为防止触发 TG 官方限流，简报将排队依次送达，请耐心等待)*"
-                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT; do
-                            call_agent "$AIP" "$APORT" "/trigger_report" > /dev/null &
-                            sleep 2  
-                        done
+	                "all_reports")
+	                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID';")
+	                    if [ -z "$NODE_DATA" ]; then
+	                        send_msg "$CHAT_ID" "⚠️ 您名下暂无在线节点。"
+	                    else
+	                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在召唤所有哨兵回传简报...**%0A*(为防止触发 TG 官方限流，简报将排队依次送达，请耐心等待)*"
+	                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT AFP; do
+	                            call_agent "$AIP" "$APORT" "/trigger_report" "" "$AFP" > /dev/null &
+	                            sleep 2  
+	                        done
                     fi
                     ;;
 
-                "all_run")
-                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID';")
-                    if [ -z "$NODE_DATA" ]; then
-                        send_msg "$CHAT_ID" "⚠️ 您名下暂无在线节点。"
-                    else
-                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒所有哨兵执行系统维护...**"
-                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT; do
-                            call_agent "$AIP" "$APORT" "/trigger_run" > /dev/null &
+	                "all_run")
+	                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID';")
+	                    if [ -z "$NODE_DATA" ]; then
+	                        send_msg "$CHAT_ID" "⚠️ 您名下暂无在线节点。"
+	                    else
+	                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒所有哨兵执行系统维护...**"
+	                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT AFP; do
+	                            call_agent "$AIP" "$APORT" "/trigger_run" "" "$AFP" > /dev/null &
                             sleep 0.2  
                         done
                     fi
@@ -433,14 +448,15 @@ except:
                         TARGET_NODE=$(echo "$TARGET_NODE" | tr -cd 'a-zA-Z0-9_.-')
                         CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
                         
-                        AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
-                        AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-                        AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+	                        AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+	                        AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+	                        AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+	                        AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
 
-                        if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
-                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` ($AGENT_IP) 下发 [quality] 指令，请稍候..."
-                            
-                            RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_quality")
+	                        if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+	                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` ($AGENT_IP) 下发 [quality] 指令，请稍候..."
+	                            
+	                            RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_quality" "" "$AGENT_FP")
                             
                             if [ "$RESPONSE" == "FAILED" ]; then
                                 send_msg "$CHAT_ID" "❌ 指令下发超时或失败！请检查节点公网 IP 或防火墙端口 ($AGENT_PORT) 是否放行。"
@@ -595,12 +611,13 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                     # [安全防御] TARGET_STATE 严格过滤
                     TARGET_STATE=$(echo "$TARGET_STATE" | tr -dc 'a-zA-Z0-9')
                     
-                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
-                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
-                    
-                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
-                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_toggle" "&mod=${MOD_NAME}&state=${TARGET_STATE}")
+	                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+	                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+	                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+	                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
+	                    
+	                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+	                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_toggle" "&mod=${MOD_NAME}&state=${TARGET_STATE}" "$AGENT_FP")
                         
                         if [[ "$RESPONSE" == *"Action Accepted"* ]]; then
                             db_exec "UPDATE nodes SET enable_${MOD_NAME}='$TARGET_STATE' WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE';"
@@ -711,16 +728,17 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                     IFS=':' read -r CMD TARGET_NODE NEW_ALIAS <<< "$TEXT"
                     CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
                     
-                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
-                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+	                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+	                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+	                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+	                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
 
-                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
-                        send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 下发重命名指令，正在建立加密隧道..."
-                        
-                        # [防线穿越] 借由 Base64 编码对下发特征进行混淆与防篡改护甲加持
-                        ALIAS_B64=$(echo -n "$NEW_ALIAS" | base64 | tr -d '\n' | tr '+/' '-_')
-                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}")
+	                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+	                        send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 下发重命名指令，正在建立加密隧道..."
+	                        
+	                        # [防线穿越] 借由 Base64 编码对下发特征进行混淆与防篡改护甲加持
+	                        ALIAS_B64=$(echo -n "$NEW_ALIAS" | base64 | tr -d '\n' | tr '+/' '-_')
+	                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}" "$AGENT_FP")
                         
                         if [ "$RESPONSE" == "FAILED" ]; then
                             send_msg "$CHAT_ID" "❌ 指令下发超时！为防范劫持风险，已终止请求。"
@@ -741,60 +759,73 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                     send_ui "$CHAT_ID" "☢️ **操作确认**：即将向 \`$TARGET_NODE\` 下发 OTA 热更新指令。\n节点更新完成后会自动发送包含新版本号的注册回执，确定执行？" "$CONFIRM_BTNS"
                     ;;
 
-                ota_execute:*)
-                    TARGET_NODE=$(echo "${TEXT#*:}" | tr -cd 'a-zA-Z0-9_.-')
-                    CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
-                    
-                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
-                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+		                ota_execute:*)
+		                    TARGET_NODE=$(echo "${TEXT#*:}" | tr -cd 'a-zA-Z0-9_.-')
+		                    CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
+		                    
+		                    # [P1-008] OTA 升级前从仓库拉取 install.sh 并计算 SHA256 哈希
+		                    OTA_VERIFY_HASH=""
+		                    OTA_TMP_INSTALL="/tmp/ota_verify_install.sh"
+		                    curl -fsSL --connect-timeout 10 --retry 2 "${REPO_RAW_URL}/core/install.sh" -o "$OTA_TMP_INSTALL" 2>/dev/null
+		                    if [ -s "$OTA_TMP_INSTALL" ]; then
+		                        OTA_VERIFY_HASH=$(sha256sum "$OTA_TMP_INSTALL" | cut -d' ' -f1)
+		                        rm -f "$OTA_TMP_INSTALL"
+		                    fi
+		                    
+		                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+		                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+		                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+		                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
+	
+		                    # [修正点] 必须保留这层外壳判断
+		                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+		                        if [ -n "$MSG_ID" ]; then
+		                            edit_msg "$CHAT_ID" "$MSG_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
+		                        else
+		                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
+		                        fi
+		                        
+		                        local ota_suffix=""
+		                        [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
+		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ota" "$ota_suffix" "$AGENT_FP")
+	                        
+	                        if [ "$RESPONSE" == "FAILED" ]; then
+	                            TEXT_RES="❌ OTA 指令下发彻底失败！链路异常或严禁使用 HTTP 降级通讯。"
+	                        elif [[ "$RESPONSE" == *"403"* ]]; then
+	                            TEXT_RES="⚠️ **节点拒绝执行**：该节点本地未开启 OTA 权限或运行在官方网关下！"
+	                        else
+	                            TEXT_RES="✅ OTA (TLS加密) 触发成功！节点正在后台执行拉取重构..."
+	                        fi
+	                        
+	                        if [ -n "$MSG_ID" ]; then
+	                            edit_msg "$CHAT_ID" "$MSG_ID" "$TEXT_RES"
+	                        else
+	                            send_msg "$CHAT_ID" "$TEXT_RES"
+	                        fi
+	                    else
+	                        send_msg "$CHAT_ID" "❌ 数据库中未找到该节点的通讯地址。"
+	                    fi
+	                    ;;
 
-                    # [修正点] 必须保留这层外壳判断
-                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
-                        if [ -n "$MSG_ID" ]; then
-                            edit_msg "$CHAT_ID" "$MSG_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
-                        else
-                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
-                        fi
-                        
-                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ota")
-                        
-                        if [ "$RESPONSE" == "FAILED" ]; then
-                            TEXT_RES="❌ OTA 指令下发彻底失败！链路异常或严禁使用 HTTP 降级通讯。"
-                        elif [[ "$RESPONSE" == *"403"* ]]; then
-                            TEXT_RES="⚠️ **节点拒绝执行**：该节点本地未开启 OTA 权限或运行在官方网关下！"
-                        else
-                            TEXT_RES="✅ OTA (TLS加密) 触发成功！节点正在后台执行拉取重构..."
-                        fi
-                        
-                        if [ -n "$MSG_ID" ]; then
-                            edit_msg "$CHAT_ID" "$MSG_ID" "$TEXT_RES"
-                        else
-                            send_msg "$CHAT_ID" "$TEXT_RES"
-                        fi
-                    else
-                        send_msg "$CHAT_ID" "❌ 数据库中未找到该节点的通讯地址。"
-                    fi
-                    ;;
+	                google:*|trust:*|run:*|report:*|log:*|quality:*)
+	                    ACTION_TYPE=$(echo "$TEXT" | cut -d':' -f1)
+	                    TARGET_NODE=$(echo "$TEXT" | cut -d':' -f2 | tr -cd 'a-zA-Z0-9_.-')
+	                    CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
+	                    
+	                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+	                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+	                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+	                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
 
-                google:*|trust:*|run:*|report:*|log:*|quality:*)
-                    ACTION_TYPE=$(echo "$TEXT" | cut -d':' -f1)
-                    TARGET_NODE=$(echo "$TEXT" | cut -d':' -f2 | tr -cd 'a-zA-Z0-9_.-')
-                    CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
-                    
-                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
-                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
-
-                    # [修正点] 必须保留这层外壳判断
-                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
-                        if [ -n "$MSG_ID" ]; then
-                            edit_msg "$CHAT_ID" "$MSG_ID" "⏳ 正在向 \`$TARGET_NODE\` ($AGENT_IP) 下发 [$ACTION_TYPE] 指令，请稍候..."
-                        else
-                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` ($AGENT_IP) 下发 [$ACTION_TYPE] 指令，请稍候..."
-                        fi
-                        
-                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_${ACTION_TYPE}")
+	                    # [修正点] 必须保留这层外壳判断
+	                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+	                        if [ -n "$MSG_ID" ]; then
+	                            edit_msg "$CHAT_ID" "$MSG_ID" "⏳ 正在向 \`$TARGET_NODE\` ($AGENT_IP) 下发 [$ACTION_TYPE] 指令，请稍候..."
+	                        else
+	                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` ($AGENT_IP) 下发 [$ACTION_TYPE] 指令，请稍候..."
+	                        fi
+	                        
+	                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_${ACTION_TYPE}" "" "$AGENT_FP")
                         
                         if [ "$RESPONSE" == "FAILED" ]; then
                             TEXT_RES="❌ 指令下发超时或失败！为保护链路安全，已终止通信 (严禁降级为 HTTP)。"
