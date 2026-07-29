@@ -268,16 +268,19 @@ while true; do
                 [ -z "$AGENT_OTA" ] && AGENT_OTA="false"
                 
                 # SSRF 拦截墙（使用 Python ipaddress 库全面验证）
-                if ! echo "$AGENT_IP" | python3 -c "
+                if echo "$AGENT_IP" | python3 -c "
 import sys, ipaddress
 try:
-    ip = ipaddress.ip_address(sys.stdin.read().strip())
+    raw = sys.stdin.read().strip()
+    # 处理逗号分隔的多 IP（取第一个做 SSRF 检查）
+    first_ip = raw.split(',')[0].strip().strip('[]')
+    ip = ipaddress.ip_address(first_ip)
     if ip.is_private or ip.is_loopback or ip.is_link_local or \
        ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         sys.exit(0)
     sys.exit(1)
 except:
-    sys.exit(1)
+    sys.exit(0)
 " 2>/dev/null; then
                     send_msg "$CHAT_ID" "⛔ **安全拦截**：禁止注册内网/回环/保留 IP，防止 SSRF 攻击渗透。"
                     continue
