@@ -9,7 +9,10 @@ CONF="/opt/ip_sentinel_master/master.conf"
 [ ! -f "$CONF" ] && exit 1
 source "$CONF"
 
-REPO_RAW_URL="https://raw.githubusercontent.com/hotyue/IP-Sentinel/main"
+# 双轨密钥体系：优先使用 HMAC_SECRET，回退至 CHAT_ID 确保向后兼容
+HMAC_SECRET=${HMAC_SECRET:-$CHAT_ID}
+
+REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/IP-Sentinel/hardened"
 MASTER_VERSION=${MASTER_VERSION:-"3.5.0"}
 
 OFFSET_FILE="${MASTER_DIR}/.tg_offset"
@@ -77,7 +80,9 @@ generate_signed_url() {
     
     local payload="${action_path}:${current_t}"
     # [v4.1.7 致命修复] 弃用 -hmac，改用 -macopt 标准语法，彻底杜绝 TG 群组负数 ID 导致的 OpenSSL 参数注入崩溃
-    local signature=$(echo -n "$payload" | openssl dgst -sha256 -mac HMAC -macopt key:"$CHAT_ID" | awk '{print $NF}')
+    # [P0-003] 独立密钥体系：优先使用 HMAC_SECRET 作为 HMAC 签名密钥，回退至 CHAT_ID 确保向后兼容
+    local HMAC_KEY="${HMAC_SECRET:-$CHAT_ID}"
+    local signature=$(echo -n "$payload" | openssl dgst -sha256 -mac HMAC -macopt key:"$HMAC_KEY" | awk '{print $NF}')
     
     echo "https://${target_ip}:${target_port}${action_path}?t=${current_t}&sign=${signature}"
 }
@@ -252,9 +257,19 @@ while true; do
                 AGENT_OTA=$(echo "$RAW_OTA" | tr -cd 'a-z')
                 [ -z "$AGENT_OTA" ] && AGENT_OTA="false"
                 
-                # SSRF 拦截墙
-                if [[ "$AGENT_IP" =~ ^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^::1$|^localhost$ ]]; then
-                    send_msg "$CHAT_ID" "⛔ **安全拦截**：禁止注册内网或回环 IP，防止 SSRF 攻击渗透。"
+                # SSRF 拦截墙（使用 Python ipaddress 库全面验证）
+                if ! echo "$AGENT_IP" | python3 -c "
+import sys, ipaddress
+try:
+    ip = ipaddress.ip_address(sys.stdin.read().strip())
+    if ip.is_private or ip.is_loopback or ip.is_link_local or \
+       ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        sys.exit(0)
+    sys.exit(1)
+except:
+    sys.exit(1)
+" 2>/dev/null; then
+                    send_msg "$CHAT_ID" "⛔ **安全拦截**：禁止注册内网/回环/保留 IP，防止 SSRF 攻击渗透。"
                     continue
                 fi
                 
@@ -570,6 +585,15 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                 toggle:*)
                     IFS=':' read -r CMD MOD_NAME TARGET_NODE TARGET_STATE <<< "$TEXT"
                     CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
+                    
+                    # [安全防御] MOD_NAME 白名单验证
+                    if [[ "$MOD_NAME" != "google" && "$MOD_NAME" != "trust" && "$MOD_NAME" != "ota" ]]; then
+                        send_msg "$CHAT_ID" "⛔ 无效的模块名称。"
+                        continue
+                    fi
+
+                    # [安全防御] TARGET_STATE 严格过滤
+                    TARGET_STATE=$(echo "$TARGET_STATE" | tr -dc 'a-zA-Z0-9')
                     
                     AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
                     AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)

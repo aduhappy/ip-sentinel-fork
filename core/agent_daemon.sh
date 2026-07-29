@@ -186,7 +186,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-type", "text/plain")
                 self.end_headers()
                 self.wfile.write(b"Action Accepted: runner\n")
-                os.system("nohup bash /opt/ip_sentinel/core/runner.sh >/dev/null 2>&1 &")
+                subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/runner.sh"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -198,7 +199,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-type", "text/plain")
                 self.end_headers()
                 self.wfile.write(b"Action Accepted: mod_google\n")
-                os.system("nohup bash /opt/ip_sentinel/core/mod_google.sh >/dev/null 2>&1 &")
+                subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/mod_google.sh"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             else:
                 self.send_response(403)
                 self.send_header("Content-type", "text/plain")
@@ -212,7 +214,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-type", "text/plain")
                 self.end_headers()
                 self.wfile.write(b"Action Accepted: mod_trust\n")
-                os.system("nohup bash /opt/ip_sentinel/core/mod_trust.sh >/dev/null 2>&1 &")
+                subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/mod_trust.sh"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             else:
                 self.send_response(403)
                 self.send_header("Content-type", "text/plain")
@@ -225,7 +228,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-type", "text/plain")
             self.end_headers()
             self.wfile.write(b"Action Accepted: tg_report\n")
-            os.system("nohup bash /opt/ip_sentinel/core/tg_report.sh >/dev/null 2>&1 &")
+            subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/tg_report.sh"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
 
         # 路由 4: 获取并回传实时日志切片
         elif req_path == '/trigger_log':
@@ -292,7 +296,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"Action Accepted: trigger_quality\n")
             
             if os.path.exists('/opt/ip_sentinel/core/mod_quality.sh'):
-                os.system("nohup bash /opt/ip_sentinel/core/mod_quality.sh >/dev/null 2>&1 &")
+                subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/mod_quality.sh"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
 
         # 路由 6: 节点展示别名热修改 (全量 WAF 防护)
         elif req_path == '/trigger_rename':
@@ -436,7 +441,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 # [防线/容灾] 逃逸 Cgroup 隔离沙盒，并引入前置脚本语法校验防砖
                 import shutil
                 import base64
-                repo_url = "https://raw.githubusercontent.com/hotyue/IP-Sentinel/main"
+                repo_url = "https://raw.githubusercontent.com/aduhappy/IP-Sentinel/hardened"
                 if os.path.exists('/opt/ip_sentinel/core/install.sh'):
                     with open('/opt/ip_sentinel/core/install.sh', 'r') as f:
                         for line in f:
@@ -464,12 +469,18 @@ fi
 """
                 ota_script_b64 = base64.b64encode(ota_script.encode('utf-8')).decode('utf-8')
                 
-                if shutil.which("systemd-run"):
-                    full_cmd = f"systemd-run --quiet --no-block bash -c \"echo '{ota_script_b64}' | base64 -d | bash\""
-                else:
-                    full_cmd = f"nohup bash -c \"echo '{ota_script_b64}' | base64 -d | bash\" >/dev/null 2>&1 &"
-                    
-                os.system(full_cmd)
+                import tempfile
+                import os as os_mod
+                try:
+                    decoded_script = base64.b64decode(ota_script_b64).decode('utf-8')
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, dir='/tmp') as f:
+                        f.write(decoded_script)
+                        f.flush()
+                        os_mod.chmod(f.name, 0o700)
+                    subprocess.Popen(["nohup", "bash", f.name],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+                except Exception as e:
+                    print(f"OTA script execution failed: {e}")
                 
             except Exception as e:
                 self.send_response(500)
