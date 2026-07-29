@@ -5,6 +5,8 @@
 # 核心功能: 指纹防惊群错峰轮换、LBS 底层静默分发、深度探针签名防伪
 # ==========================================================
 
+trap 'rm -f /tmp/ip_sentinel_* 2>/dev/null' EXIT
+
 INSTALL_DIR="/opt/ip_sentinel"
 CONFIG_FILE="${INSTALL_DIR}/config.conf"
 UA_TIME_FILE="${INSTALL_DIR}/core/.ua_last_update"
@@ -39,14 +41,14 @@ log "Updater" "INFO " "========== 触发后台静默 OTA 热数据更新 =======
 # ==========================================================
 # [网络路由锁定] 构建强锚定出站屏障，彻底阻断跨协议溢出逃逸
 # ==========================================================
-CURL_CMD="curl -${IP_PREF:-4} -sL"
+CURL_ARGS=("-${IP_PREF:-4}" "-sL")
 
 if [ -n "$BIND_IP" ]; then
     RAW_BIND_IP=$(echo "$BIND_IP" | tr -d '[]')
     if ! ip addr show 2>/dev/null | grep -qw "$RAW_BIND_IP"; then
         log "Updater" "WARN " "检测到绑定的出口 IP ($RAW_BIND_IP) 已丢失，自动退回默认路由！"
     else
-        CURL_CMD="$CURL_CMD --interface $RAW_BIND_IP"
+        CURL_ARGS+=("--interface" "$RAW_BIND_IP")
     fi
 fi
 
@@ -69,7 +71,7 @@ DIFF=$((NOW - LAST_UPDATE))
 
 if [ "$DIFF" -ge 2592000 ] || [ "$LAST_UPDATE" -eq 0 ]; then
     TMP_UA="/tmp/ip_sentinel_ua.txt"
-    $CURL_CMD "${REPO_RAW_URL}/data/user_agents.txt" -o "$TMP_UA"
+    curl "${CURL_ARGS[@]}" "${REPO_RAW_URL}/data/user_agents.txt" -o "$TMP_UA"
     
     if [ -s "$TMP_UA" ]; then
         mv "$TMP_UA" "${INSTALL_DIR}/data/user_agents.txt"
@@ -88,7 +90,7 @@ fi
 # [态势感知热更] 动态注入本土高权热搜及战区 LBS 规则
 # ----------------------------------------------------------
 TMP_KW="/tmp/ip_sentinel_kw.txt"
-$CURL_CMD "${REPO_RAW_URL}/data/keywords/kw_${REGION_CODE}.txt" -o "$TMP_KW"
+curl "${CURL_ARGS[@]}" "${REPO_RAW_URL}/data/keywords/kw_${REGION_CODE}.txt" -o "$TMP_KW"
 
 if [ -s "$TMP_KW" ]; then
     mv "$TMP_KW" "${INSTALL_DIR}/data/keywords/kw_${REGION_CODE}.txt"
@@ -104,7 +106,7 @@ if [ -n "$REGION_JSON_FILE" ] && [ -f "$REGION_JSON_FILE" ]; then
     REL_PATH=${REGION_JSON_FILE#*${INSTALL_DIR}/}
     TMP_JSON="/tmp/ip_sentinel_region.json"
     
-    $CURL_CMD "${REPO_RAW_URL}/${REL_PATH}" -o "$TMP_JSON"
+    curl "${CURL_ARGS[@]}" "${REPO_RAW_URL}/${REL_PATH}" -o "$TMP_JSON"
     
     if [ -s "$TMP_JSON" ]; then
         mv "$TMP_JSON" "$REGION_JSON_FILE"
@@ -128,7 +130,7 @@ if [ -f "$PROBE_HASH_FILE" ]; then
 fi
 
 # 从主源拉取
-$CURL_CMD "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$TMP_PROBE"
+curl "${CURL_ARGS[@]}" "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$TMP_PROBE"
 
 # [P1-003] SHA256 完整性校验
 verify_probe_update() {
@@ -145,10 +147,10 @@ verify_probe_update() {
         local actual_hash=$(sha256sum "$tmp_file" | cut -d' ' -f1)
         if [ "$actual_hash" != "$PROBE_EXPECTED_HASH" ]; then
             log "Updater" "WARN " "⚠️ 探针 SHA256 不匹配 (期望: $PROBE_EXPECTED_HASH, 实际: $actual_hash)"
-            # 哈希不匹配时仍然更新（上游可能已更新），重新锁定新哈希
-            log "Updater" "WARN " "🔄 上游探针可能已更新，重新锁定新哈希"
+            log "Updater" "WARN " "❌ 哈希不匹配，拒绝更新，请手动确认上游探针变更后重试"
+            return 1
         fi
-        # 更新哈希锁定文件
+        # 哈希匹配，更新锁定文件（时间戳防回滚）
         echo "$actual_hash" > "$PROBE_HASH_FILE"
     fi
     return 0
