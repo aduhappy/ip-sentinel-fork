@@ -12,7 +12,7 @@ source "$CONF"
 # 双轨密钥体系：优先使用 HMAC_SECRET，回退至 CHAT_ID 确保向后兼容
 HMAC_SECRET=${HMAC_SECRET:-$CHAT_ID}
 
-REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/IP-Sentinel/hardened"
+REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
 MASTER_VERSION=${MASTER_VERSION:-"3.5.0"}
 
 OFFSET_FILE="${MASTER_DIR}/.tg_offset"

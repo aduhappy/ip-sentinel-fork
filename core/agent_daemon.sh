@@ -462,7 +462,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 
                 # [防线/容灾] 逃逸 Cgroup 隔离沙盒，并引入前置脚本语法校验防砖
                 import base64
-                repo_url = "https://raw.githubusercontent.com/aduhappy/IP-Sentinel/hardened"
+                repo_url = "https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
                 if os.path.exists('/opt/ip_sentinel/core/install.sh'):
                     with open('/opt/ip_sentinel/core/install.sh', 'r') as f:
                         for line in f:
