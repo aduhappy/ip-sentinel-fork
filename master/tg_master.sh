@@ -138,6 +138,7 @@ db_exec "ALTER TABLE nodes ADD COLUMN node_alias TEXT;" 2>/dev/null
 db_exec "ALTER TABLE nodes ADD COLUMN enable_google TEXT DEFAULT 'true';" 2>/dev/null
 db_exec "ALTER TABLE nodes ADD COLUMN enable_trust TEXT DEFAULT 'true';" 2>/dev/null
 db_exec "ALTER TABLE nodes ADD COLUMN enable_ota TEXT DEFAULT 'false';" 2>/dev/null
+db_exec "ALTER TABLE nodes ADD COLUMN agent_version TEXT DEFAULT '';" 2>/dev/null
 
 # 构建与动态扩展 IP 质量历史趋势库
 db_exec "CREATE TABLE IF NOT EXISTS ip_trend_log (
@@ -266,6 +267,13 @@ while true; do
                 [ -z "$NODE_ALIAS" ] && NODE_ALIAS="$NODE_NAME"
                 AGENT_OTA=$(echo "$RAW_OTA" | tr -cd 'a-z')
                 [ -z "$AGENT_OTA" ] && AGENT_OTA="false"
+
+                # 解析第 8 个字段（agent_version），用于 OTA 升级追踪
+                RAW_VERSION=""
+                if [ "$FIELD_COUNT" -ge 8 ]; then
+                    IFS='|' read -r _ _ _ _ _ _ _ RAW_VERSION <<< "$REG_LINE"
+                fi
+                AGENT_VERSION=$(echo "$RAW_VERSION" | tr -cd 'a-zA-Z0-9._-' | cut -c 1-20)
                 
                 # SSRF 拦截墙（使用 Python ipaddress 库全面验证）
                 if echo "$AGENT_IP" | python3 -c "
@@ -292,7 +300,7 @@ except:
                 fi
 
                 # [v4.2.2 容灾对齐] 允许 agent_ip 字段以逗号分隔的形式完整固化多路由通道
-                db_exec "INSERT INTO nodes (chat_id, node_name, agent_ip, agent_port, last_seen, region, node_alias, enable_ota, cert_fp) VALUES ('$CHAT_ID', '$NODE_NAME', '$AGENT_IP', '$AGENT_PORT', CURRENT_TIMESTAMP, '$AGENT_REGION', '$NODE_ALIAS', '$AGENT_OTA', '') ON CONFLICT(chat_id, node_name) DO UPDATE SET agent_ip='$AGENT_IP', agent_port='$AGENT_PORT', last_seen=CURRENT_TIMESTAMP, region='$AGENT_REGION', node_alias='$NODE_ALIAS', enable_ota='$AGENT_OTA', cert_fp=CASE WHEN cert_fp='' THEN '' ELSE cert_fp END;"
+                db_exec "INSERT INTO nodes (chat_id, node_name, agent_ip, agent_port, last_seen, region, node_alias, enable_ota, cert_fp, agent_version) VALUES ('$CHAT_ID', '$NODE_NAME', '$AGENT_IP', '$AGENT_PORT', CURRENT_TIMESTAMP, '$AGENT_REGION', '$NODE_ALIAS', '$AGENT_OTA', '', '$AGENT_VERSION') ON CONFLICT(chat_id, node_name) DO UPDATE SET agent_ip='$AGENT_IP', agent_port='$AGENT_PORT', last_seen=CURRENT_TIMESTAMP, region='$AGENT_REGION', node_alias='$NODE_ALIAS', enable_ota='$AGENT_OTA', cert_fp=CASE WHEN cert_fp='' THEN '' ELSE cert_fp END, agent_version=CASE WHEN '$AGENT_VERSION' != '' THEN '$AGENT_VERSION' ELSE agent_version END;"
 
                 # [P1-002] 注册后尝试获取 Agent 证书指纹用于后续 TLS 固定钉扎
                 CERT_FP=""
