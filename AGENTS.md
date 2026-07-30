@@ -1,13 +1,13 @@
 # IP-Sentinel 审计与修复项目
 
 > 目标仓库：https://github.com/hotyue/IP-Sentinel
-> Fork 仓库：https://github.com/aduhappy/ip-sentinel-fork（hardened 分支）
+> Fork 仓库：https://github.com/aduhappy/ip-sentinel-fork（main 分支）
 > 协议：AGPL-3.0
 
 ## 📍 TL;DR
 - **当前阶段**：全量安全修复完成（3×P0 + 12×P1 + 多项 P2/P3），升级路径加固完毕，文档配套更新
-- **下一步**：部署 hardened 分支生产使用，按需同步上游变更
-- **最后操作**：一键备份升级脚本（upgrade.sh）、主子同体兼容、UPGRADE_GUIDE/README/CHANGELOG 全量更新
+- **下一步**：部署 main 分支生产使用，按需同步上游变更
+- **最后操作**：双层仓库（外壳 + fork/ 子仓库）简化为单仓库，默认分支 main，配置推送至 aduhappy/ip-sentinel-fork
 - **阻塞**：无
 
 ---
@@ -26,6 +26,7 @@
 - ✅ **9× P2**（中危）+ **5× P3**（低危）
 - ✅ **全部 P0/P1 已修复**，零待办
 - ✅ **所有安全修复经多方代码审查确认**
+- ✅ **双层仓库已简化为单仓库**（主仓库→origin/aduhappy/ip-sentinel-fork）
 
 ### hardened 分支统计
 
@@ -102,7 +103,7 @@
 ## 4. 铁律
 
 1. **不改原始源码** — audit/repo/ 下的源码是只读副本
-2. **修复在 fork/ 下操作** — hardened 分支存放所有安全修复
+2. **修复在 main 分支上操作** — 所有安全修复已合并到 main
 3. **每项修复独立 commit** — 方便上游 cherry-pick
 4. **不发布 exploit** — 报告只给行号、影响描述
 
@@ -111,11 +112,12 @@
 | 内容 | 存放位置 |
 |------|----------|
 | 审计报告 | `audit/` |
-| 代码仓库（fork） | `fork/`（对接 GitHub hardened 分支） |
-| 上游跟踪 | `fork/.git` upstream remote |
+| 代码仓库（单仓库） | 根目录（origin→aduhappy/ip-sentinel-fork） |
+| 上游跟踪 | `upstream` remote→hotyue/IP-Sentinel |
 
 ## 6. 环境
 
-- Fork: https://github.com/aduhappy/ip-sentinel-fork
-- 上游: https://github.com/hotyue/IP-Sentinel
+- 远程 origin: https://github.com/aduhappy/ip-sentinel-fork
+- 上游 upstream: https://github.com/hotyue/IP-Sentinel
 - 本地: G:\ip-sentinel
+- 默认分支: `main`
