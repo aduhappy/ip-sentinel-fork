@@ -2,6 +2,7 @@
 # ==========================================================
 # IP-Sentinel 一键备份升级脚本 — hardened 分支
 # 用法: bash <(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/upgrade.sh)
+# 支持同一台机器上 Master + Agent 并存（主子同体）
 # ==========================================================
 set -euo pipefail
 
@@ -22,12 +23,12 @@ step()  { echo -e "\n${CYAN}========== $1 ==========${NC}"; }
 REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
 
 # 全局变量
-ROLE=""
-INSTALL_DIR=""
-CONF_FILE=""
-SERVICE_NAME=""
-CURRENT_VERSION=""
-TARGET_VERSION=""
+HAS_MASTER=false
+HAS_AGENT=false
+MASTER_VER=""
+AGENT_VER=""
+MASTER_TARGET=""
+AGENT_TARGET=""
 OLD_NODE_NAME=""
 BACKUP_DIR=""
 
@@ -83,32 +84,26 @@ version_lt() {
     test "$(printf '%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" && test "$1" != "$2"
 }
 
-detect_role() {
+detect_roles() {
     step "Step 1: 环境检测"
 
+    # 独立检测 Master 和 Agent（互不排斥）
     if [ -f "/opt/ip_sentinel_master/master.conf" ]; then
-        ROLE="master"
-        INSTALL_DIR="/opt/ip_sentinel_master"
-        CONF_FILE="${INSTALL_DIR}/master.conf"
-        SERVICE_NAME="ip-sentinel-master.service"
+        HAS_MASTER=true
+        MASTER_VER=$(grep "^MASTER_VERSION=" "/opt/ip_sentinel_master/master.conf" 2>/dev/null | cut -d'"' -f2 || true)
+        MASTER_VER="${MASTER_VER:-未知}"
+        info "检测到 Master (v${MASTER_VER})"
+    fi
 
-        CURRENT_VERSION=$(grep "^MASTER_VERSION=" "$CONF_FILE" 2>/dev/null | cut -d'"' -f2 || true)
-        CURRENT_VERSION="${CURRENT_VERSION:-未知}"
+    if [ -f "/opt/ip_sentinel/config.conf" ]; then
+        HAS_AGENT=true
+        AGENT_VER=$(grep "^AGENT_VERSION=" "/opt/ip_sentinel/config.conf" 2>/dev/null | cut -d'"' -f2 || true)
+        OLD_NODE_NAME=$(grep "^NODE_NAME=" "/opt/ip_sentinel/config.conf" 2>/dev/null | cut -d'"' -f2 || true)
+        AGENT_VER="${AGENT_VER:-未知}"
+        info "检测到 Agent (v${AGENT_VER})"
+    fi
 
-        info "检测到 Master 角色 (v${CURRENT_VERSION})"
-
-    elif [ -f "/opt/ip_sentinel/config.conf" ]; then
-        ROLE="agent"
-        INSTALL_DIR="/opt/ip_sentinel"
-        CONF_FILE="${INSTALL_DIR}/config.conf"
-        SERVICE_NAME="ip-sentinel-agent-daemon.service"
-
-        CURRENT_VERSION=$(grep "^AGENT_VERSION=" "$CONF_FILE" 2>/dev/null | cut -d'"' -f2 || true)
-        OLD_NODE_NAME=$(grep "^NODE_NAME=" "$CONF_FILE" 2>/dev/null | cut -d'"' -f2 || true)
-        CURRENT_VERSION="${CURRENT_VERSION:-未知}"
-
-        info "检测到 Agent 角色 (v${CURRENT_VERSION})"
-    else
+    if ! $HAS_MASTER && ! $HAS_AGENT; then
         error "未检测到已安装的 IP-Sentinel（Master 或 Agent）。"
         echo -e "💡 请确认以下路径之一存在："
         echo -e "   - /opt/ip_sentinel_master/master.conf (Master)"
@@ -116,31 +111,34 @@ detect_role() {
         exit 1
     fi
 
-    # 获取目标版本
-    local version_line
-    if [ "$ROLE" = "master" ]; then
-        version_line=$(curl -sfL "${REPO_RAW_URL}/version.txt?t=$(date +%s)" | grep "^MASTER_VERSION=" || true)
-        TARGET_VERSION=$(echo "$version_line" | cut -d'=' -f2 | tr -d '[:space:]')
-    else
-        version_line=$(curl -sfL "${REPO_RAW_URL}/version.txt?t=$(date +%s)" | grep "^AGENT_VERSION=" || true)
-        TARGET_VERSION=$(echo "$version_line" | cut -d'=' -f2 | tr -d '[:space:]')
+    if $HAS_MASTER && $HAS_AGENT; then
+        info "检测到主子同体（Master + Agent 共存），将依次升级 Master → Agent。"
     fi
-    TARGET_VERSION="${TARGET_VERSION:-未知}"
 
-    info "当前版本: v${CURRENT_VERSION}"
-    info "目标版本: v${TARGET_VERSION}"
+    # 获取目标版本
+    local version_txt
+    version_txt=$(curl -sfL "${REPO_RAW_URL}/version.txt?t=$(date +%s)" 2>/dev/null || true)
 
-    # 版本比较
-    if [ "$CURRENT_VERSION" != "未知" ] && [ "$TARGET_VERSION" != "未知" ]; then
-        if ! version_lt "$CURRENT_VERSION" "$TARGET_VERSION"; then
-            warn "当前版本 (v${CURRENT_VERSION}) 已达到或超过目标版本 (v${TARGET_VERSION})。"
-            echo -e "   是否仍要强制重新部署？(y/n, 默认 n): "
-            read -r FORCE_CHOICE
-            if [[ ! "$FORCE_CHOICE" =~ ^[Yy]$ ]]; then
-                info "已取消升级。"
-                exit 0
-            fi
-            warn "强制重新部署已确认，将继续执行..."
+    if $HAS_MASTER; then
+        MASTER_TARGET=$(echo "$version_txt" | grep "^MASTER_VERSION=" | cut -d'=' -f2 | tr -d '[:space:]' || true)
+        MASTER_TARGET="${MASTER_TARGET:-未知}"
+        info "Master 当前: v${MASTER_VER} → 目标: v${MASTER_TARGET}"
+    fi
+    if $HAS_AGENT; then
+        AGENT_TARGET=$(echo "$version_txt" | grep "^AGENT_VERSION=" | cut -d'=' -f2 | tr -d '[:space:]' || true)
+        AGENT_TARGET="${AGENT_TARGET:-未知}"
+        info "Agent 当前: v${AGENT_VER} → 目标: v${AGENT_TARGET}"
+    fi
+
+    # 版本比较（给出警告但允许继续）
+    if $HAS_MASTER && [ "$MASTER_VER" != "未知" ] && [ "$MASTER_TARGET" != "未知" ]; then
+        if ! version_lt "$MASTER_VER" "$MASTER_TARGET"; then
+            warn "Master 已是最新 (v${MASTER_VER} >= v${MASTER_TARGET})"
+        fi
+    fi
+    if $HAS_AGENT && [ "$AGENT_VER" != "未知" ] && [ "$AGENT_TARGET" != "未知" ]; then
+        if ! version_lt "$AGENT_VER" "$AGENT_TARGET"; then
+            warn "Agent 已是最新 (v${AGENT_VER} >= v${AGENT_TARGET})"
         fi
     fi
 }
@@ -155,16 +153,16 @@ do_backup() {
     mkdir -p "$BACKUP_DIR"
     info "创建备份目录: ${BACKUP_DIR}"
 
-    if [ "$ROLE" = "master" ]; then
-        if [ -d "/opt/ip_sentinel_master" ]; then
-            cp -a /opt/ip_sentinel_master "${BACKUP_DIR}/ip_sentinel_master"
-            info "已备份 Master 目录 (/opt/ip_sentinel_master)"
-        fi
-    else
-        if [ -d "/opt/ip_sentinel" ]; then
-            cp -a /opt/ip_sentinel "${BACKUP_DIR}/ip_sentinel"
-            info "已备份 Agent 目录 (/opt/ip_sentinel)"
-        fi
+    # 备份 Master
+    if $HAS_MASTER && [ -d "/opt/ip_sentinel_master" ]; then
+        cp -a /opt/ip_sentinel_master "${BACKUP_DIR}/ip_sentinel_master"
+        info "已备份 Master (/opt/ip_sentinel_master)"
+    fi
+
+    # 备份 Agent
+    if $HAS_AGENT && [ -d "/opt/ip_sentinel" ]; then
+        cp -a /opt/ip_sentinel "${BACKUP_DIR}/ip_sentinel"
+        info "已备份 Agent (/opt/ip_sentinel)"
     fi
 
     # 备份 systemd 服务文件
@@ -179,8 +177,6 @@ do_backup() {
         done < <(find /etc/systemd/system/ -name 'ip-sentinel-*.timer' -print0 2>/dev/null || true)
         if [ "$svc_count" -gt 0 ]; then
             info "已备份 ${svc_count} 个 systemd 服务文件"
-        else
-            warn "未找到 IP-Sentinel systemd 服务文件"
         fi
     fi
 
@@ -188,16 +184,14 @@ do_backup() {
     if crontab -l > "${BACKUP_DIR}/crontab.txt" 2>/dev/null; then
         info "已备份 crontab"
     else
-        warn "无 crontab 或无法读取 (非 root 或 crontab 为空)"
         touch "${BACKUP_DIR}/crontab.txt"
     fi
 
-    # 记录备份路径供后续使用
+    # 记录备份路径
     echo "$BACKUP_DIR" > /tmp/.ip_sentinel_backup_path
 
     echo ""
     info "备份完成: ${BACKUP_DIR}"
-    echo -e "   备份内容:"
     ls -la "${BACKUP_DIR}/"
 }
 
@@ -211,18 +205,22 @@ confirm_upgrade() {
     echo "========================================"
     echo "  升级确认信息"
     echo "========================================"
-    echo "  角色:           ${ROLE}"
-    echo "  当前版本:       v${CURRENT_VERSION}"
-    echo "  目标版本:       v${TARGET_VERSION}"
-    echo "  安装目录:       ${INSTALL_DIR}"
-    echo "  备份位置:       ${BACKUP_DIR}"
+    if $HAS_MASTER; then
+        echo "  Master:     v${MASTER_VER} → v${MASTER_TARGET}"
+    fi
+    if $HAS_AGENT; then
+        echo "  Agent:      v${AGENT_VER} → v${AGENT_TARGET}"
+    fi
+    if $HAS_MASTER && $HAS_AGENT; then
+        echo "  升级顺序:   Master 优先 → Agent 随后"
+    fi
+    echo "  备份位置:   ${BACKUP_DIR}"
     echo "========================================"
     echo ""
 
     read -r -p "👉 是否继续升级？(y/n, 默认 y): " UPGRADE_CONFIRM
     if [[ "$UPGRADE_CONFIRM" =~ ^[Nn]$ ]]; then
         info "已取消升级。备份保留在: ${BACKUP_DIR}"
-        echo -e "💡 如需手动清理备份: rm -rf ${BACKUP_DIR}"
         exit 0
     fi
 
@@ -230,47 +228,49 @@ confirm_upgrade() {
 }
 
 # ==========================================================
-# 4. 执行升级
+# 4. 执行升级（Master 优先，Agent 随后）
 # ==========================================================
-do_upgrade() {
-    step "Step 4: 执行升级"
+upgrade_master() {
+    step "Step 4a: 升级 Master"
 
-    echo "🚀 正在升级 ${ROLE} (v${CURRENT_VERSION} → v${TARGET_VERSION})..."
-    echo ""
+    info "调用 Master 安装脚本 (SILENT_MASTER_OTA=true)..."
+    export SILENT_MASTER_OTA="true"
 
-    local UPGRADE_EXIT=0
-
-    if [ "$ROLE" = "master" ]; then
-        info "调用 Master 安装脚本 (SILENT_MASTER_OTA=true)..."
-        export SILENT_MASTER_OTA="true"
-        bash -c "$(curl -fsSL "${REPO_RAW_URL}/master/install_master.sh?t=$(date +%s)")" || UPGRADE_EXIT=$?
-    else
-        info "调用 Agent 安装脚本 (SILENT_OTA=true)..."
-        export SILENT_OTA="true"
-        bash -c "$(curl -fsSL "${REPO_RAW_URL}/install.sh?t=$(date +%s)")" || UPGRADE_EXIT=$?
-    fi
-
-    echo ""
-    if [ "$UPGRADE_EXIT" -ne 0 ]; then
-        error "升级脚本执行失败 (exit code: ${UPGRADE_EXIT})。"
+    if ! bash -c "$(curl -fsSL "${REPO_RAW_URL}/master/install_master.sh?t=$(date +%s)")"; then
+        error "Master 升级失败！"
         echo -e "💡 备份位于: ${BACKUP_DIR}"
-        echo -e ""
-        echo -e "💡 回滚命令参考:"
-        if [ "$ROLE" = "master" ]; then
-            echo -e "   systemctl stop ${SERVICE_NAME} 2>/dev/null || pkill -f tg_master.sh 2>/dev/null || true"
-            echo -e "   rm -rf /opt/ip_sentinel_master"
-            echo -e "   cp -a ${BACKUP_DIR}/ip_sentinel_master /opt/ip_sentinel_master"
-            echo -e "   systemctl daemon-reload && systemctl restart ${SERVICE_NAME}"
-        else
-            echo -e "   systemctl stop ${SERVICE_NAME} 2>/dev/null || pkill -f agent_daemon.sh 2>/dev/null || true"
-            echo -e "   rm -rf /opt/ip_sentinel"
-            echo -e "   cp -a ${BACKUP_DIR}/ip_sentinel /opt/ip_sentinel"
-            echo -e "   systemctl daemon-reload && systemctl restart ${SERVICE_NAME}"
-        fi
+        echo -e "💡 回滚: systemctl stop ip-sentinel-master.service 2>/dev/null || pkill -f tg_master.sh 2>/dev/null || true"
+        echo -e "         rm -rf /opt/ip_sentinel_master"
+        echo -e "         cp -a ${BACKUP_DIR}/ip_sentinel_master /opt/ip_sentinel_master"
+        echo -e "         systemctl daemon-reload && systemctl restart ip-sentinel-master.service"
         return 1
     fi
 
-    info "升级脚本执行完毕。"
+    # Master 升级后等待服务就绪
+    sleep 3
+    info "Master 升级完成。"
+    return 0
+}
+
+upgrade_agent() {
+    step "Step 4b: 升级 Agent"
+
+    info "调用 Agent 安装脚本 (SILENT_OTA=true)..."
+    export SILENT_OTA="true"
+
+    if ! bash -c "$(curl -fsSL "${REPO_RAW_URL}/install.sh?t=$(date +%s)")"; then
+        error "Agent 升级失败！"
+        echo -e "💡 备份位于: ${BACKUP_DIR}"
+        echo -e "💡 回滚: systemctl stop ip-sentinel-agent-daemon.service 2>/dev/null || pkill -f agent_daemon.sh 2>/dev/null || true"
+        echo -e "         rm -rf /opt/ip_sentinel"
+        echo -e "         cp -a ${BACKUP_DIR}/ip_sentinel /opt/ip_sentinel"
+        echo -e "         systemctl daemon-reload && systemctl restart ip-sentinel-agent-daemon.service"
+        return 1
+    fi
+
+    # Agent 升级后等待服务就绪
+    sleep 3
+    info "Agent 升级完成。"
     return 0
 }
 
@@ -283,72 +283,109 @@ do_verify() {
     local errors=0
     local warns=0
 
-    # --- 版本检查 ---
-    local new_ver=""
-    if [ "$ROLE" = "master" ]; then
+    # -------- Master 验证 --------
+    if $HAS_MASTER; then
+        echo ""
+        echo "--- Master 验证 ---"
+
+        local new_ver
         new_ver=$(grep "^MASTER_VERSION=" /opt/ip_sentinel_master/master.conf 2>/dev/null | cut -d'"' -f2 || true)
         new_ver="${new_ver:-未知}"
-        echo -e "📌 Master 版本: ${new_ver}"
-    else
-        new_ver=$(grep "^AGENT_VERSION=" /opt/ip_sentinel/config.conf 2>/dev/null | cut -d'"' -f2 || true)
-        new_ver="${new_ver:-未知}"
-        echo -e "📌 Agent 版本: ${new_ver}"
-    fi
+        echo -e "📌 版本: ${new_ver}"
 
-    if [ "$new_ver" = "未知" ]; then
-        warn "版本号读取失败，配置文件可能异常。"
-        warns=$((warns + 1))
-    elif [ "$new_ver" = "$TARGET_VERSION" ]; then
-        info "版本号匹配 (v${new_ver})"
-    else
-        warn "版本号不匹配: 期望 v${TARGET_VERSION}, 实际 v${new_ver}"
-        warns=$((warns + 1))
-    fi
-
-    # --- HMAC_SECRET 检查 ---
-    if [ -f "$CONF_FILE" ] && grep -q "^HMAC_SECRET=" "$CONF_FILE" 2>/dev/null; then
-        local hmac_val
-        hmac_val=$(grep "^HMAC_SECRET=" "$CONF_FILE" | cut -d'"' -f2 || true)
-        if [ -n "$hmac_val" ]; then
-            info "HMAC_SECRET 已配置 (长度: ${#hmac_val})"
+        if [ "$new_ver" = "未知" ]; then
+            warn "Master 版本号读取失败"
+            warns=$((warns + 1))
+        elif [ "$new_ver" = "$MASTER_TARGET" ]; then
+            info "Master 版本号匹配 (v${new_ver})"
         else
-            warn "HMAC_SECRET 为空值"
+            warn "Master 版本不匹配: 期望 v${MASTER_TARGET}, 实际 v${new_ver}"
             warns=$((warns + 1))
         fi
-    else
-        warn "HMAC_SECRET 未配置（双轨兼容会使用 CHAT_ID）"
-        warns=$((warns + 1))
-    fi
 
-    # --- 进程检查 ---
-    if [ "$ROLE" = "master" ]; then
-        if pgrep -f "tg_master.sh" > /dev/null 2>&1; then
-            info "Master 进程 (tg_master.sh) 运行中"
+        # HMAC_SECRET
+        if grep -q "^HMAC_SECRET=" /opt/ip_sentinel_master/master.conf 2>/dev/null; then
+            local hmac
+            hmac=$(grep "^HMAC_SECRET=" /opt/ip_sentinel_master/master.conf | cut -d'"' -f2 || true)
+            if [ -n "$hmac" ]; then
+                info "Master HMAC_SECRET 已配置"
+            fi
         else
-            warn "Master 进程未运行，尝试启动..."
+            warn "Master HMAC_SECRET 未配置"
             warns=$((warns + 1))
-            if command -v systemctl > /dev/null 2>&1; then
-                systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
-                sleep 1
-                if pgrep -f "tg_master.sh" > /dev/null 2>&1; then
-                    info "Master 进程已通过 systemd 启动"
-                    warns=$((warns - 1))
-                fi
+        fi
+
+        # 进程
+        if pgrep -f "tg_master.sh" > /dev/null 2>&1; then
+            info "Master 进程运行中"
+        else
+            warn "Master 进程未运行，尝试 systemctl restart..."
+            warns=$((warns + 1))
+            systemctl restart ip-sentinel-master.service 2>/dev/null || true
+            sleep 2
+        fi
+
+        # 数据库
+        if [ -f /opt/ip_sentinel_master/sentinel.db ]; then
+            if command -v sqlite3 > /dev/null 2>&1; then
+                local ncount
+                ncount=$(sqlite3 /opt/ip_sentinel_master/sentinel.db "SELECT COUNT(*) FROM nodes;" 2>/dev/null || echo "?")
+                info "数据库正常，节点数: ${ncount}"
+            fi
+        else
+            warn "Master 数据库文件不存在"
+            warns=$((warns + 1))
+        fi
+
+        # Systemd
+        if command -v systemctl > /dev/null 2>&1; then
+            if systemctl is-active ip-sentinel-master.service > /dev/null 2>&1; then
+                info "Master systemd 服务运行中"
+            else
+                warn "Master systemd 服务未激活"
+                errors=$((errors + 1))
             fi
         fi
-    else
-        local agent_alive=false
+    fi
+
+    # -------- Agent 验证 --------
+    if $HAS_AGENT; then
+        echo ""
+        echo "--- Agent 验证 ---"
+
+        local new_ver
+        new_ver=$(grep "^AGENT_VERSION=" /opt/ip_sentinel/config.conf 2>/dev/null | cut -d'"' -f2 || true)
+        new_ver="${new_ver:-未知}"
+        echo -e "📌 版本: ${new_ver}"
+
+        if [ "$new_ver" = "未知" ]; then
+            warn "Agent 版本号读取失败"
+            warns=$((warns + 1))
+        elif [ "$new_ver" = "$AGENT_TARGET" ]; then
+            info "Agent 版本号匹配 (v${new_ver})"
+        else
+            warn "Agent 版本不匹配: 期望 v${AGENT_TARGET}, 实际 v${new_ver}"
+            warns=$((warns + 1))
+        fi
+
+        # HMAC_SECRET
+        if grep -q "^HMAC_SECRET=" /opt/ip_sentinel/config.conf 2>/dev/null; then
+            local hmac
+            hmac=$(grep "^HMAC_SECRET=" /opt/ip_sentinel/config.conf | cut -d'"' -f2 || true)
+            if [ -n "$hmac" ]; then
+                info "Agent HMAC_SECRET 已配置"
+            fi
+        else
+            warn "Agent HMAC_SECRET 未配置"
+            warns=$((warns + 1))
+        fi
+
+        # 进程
         if pgrep -f "webhook.py" > /dev/null 2>&1 || pgrep -f "agent_daemon.sh" > /dev/null 2>&1; then
             info "Agent 进程运行中"
-            agent_alive=true
         else
             warn "Agent 进程未运行"
             warns=$((warns + 1))
-        fi
-
-        # 旧版 core.bak 备份残留提示
-        if [ -d /opt/ip_sentinel/core.bak ]; then
-            info "core.bak 备份仍存在（新引擎已通过验证但未清理）"
         fi
 
         # NODE_NAME 保留检查
@@ -362,31 +399,20 @@ do_verify() {
                 warns=$((warns + 1))
             fi
         fi
-    fi
 
-    # --- 数据库检查 (Master) ---
-    if [ "$ROLE" = "master" ]; then
-        if [ -f /opt/ip_sentinel_master/sentinel.db ]; then
-            local node_count=0
-            if command -v sqlite3 > /dev/null 2>&1; then
-                node_count=$(sqlite3 /opt/ip_sentinel_master/sentinel.db "SELECT COUNT(*) FROM nodes;" 2>/dev/null || echo "0")
-                info "数据库正常，节点数: ${node_count}"
-            else
-                warn "sqlite3 不可用，跳过数据库完整性检查"
-            fi
-        else
-            warn "数据库文件 sentinel.db 不存在"
-            warns=$((warns + 1))
+        # core.bak 提示
+        if [ -d /opt/ip_sentinel/core.bak ]; then
+            info "core.bak 备份仍存在（可手动清理）"
         fi
-    fi
 
-    # --- Systemd 服务检查 ---
-    if command -v systemctl > /dev/null 2>&1; then
-        if systemctl is-active "$SERVICE_NAME" > /dev/null 2>&1; then
-            info "Systemd 服务运行中 (${SERVICE_NAME})"
-        else
-            warn "Systemd 服务未激活 (${SERVICE_NAME})"
-            errors=$((errors + 1))
+        # Systemd
+        if command -v systemctl > /dev/null 2>&1; then
+            if systemctl is-active ip-sentinel-agent-daemon.service > /dev/null 2>&1; then
+                info "Agent systemd 服务运行中"
+            else
+                warn "Agent systemd 服务未激活"
+                errors=$((errors + 1))
+            fi
         fi
     fi
 
@@ -413,29 +439,27 @@ print_summary() {
     echo "========================================"
     echo "  IP-Sentinel 升级报告"
     echo "========================================"
-    echo "  角色:         ${ROLE}"
-    echo "  旧版本:       ${CURRENT_VERSION:-未知}"
-    echo "  新版本:       ${TARGET_VERSION:-未知}"
-    echo "  备份位置:     ${backup_path}"
+    if $HAS_MASTER; then
+        echo "  Master:     v${MASTER_VER} → v${MASTER_TARGET}"
+    fi
+    if $HAS_AGENT; then
+        echo "  Agent:      v${AGENT_VER} → v${AGENT_TARGET}"
+    fi
+    echo "  备份位置:   ${backup_path}"
     echo "========================================"
-
     echo ""
     echo -e "${GREEN}✅ 升级流程已执行完毕。${NC}"
-    echo -e ""
+    echo ""
     echo -e "💡 后续操作建议："
-    echo -e "   1. 检查 TG Master 面板 /start 确认功能正常"
-    if [ "$ROLE" = "master" ]; then
-        echo -e "   2. 在 TG 中发送 /nodes 查看各 Agent 版本号"
-        echo -e "   3. 验证 HMAC 鉴权: curl -s 'https://<YOUR_IP>:<PORT>/trigger_ota?t=\$(date +%s)&sign=FAKE'"
-        echo -e "   4. 确认各 Agent 已升级后，手动清理备份: rm -rf ${backup_path}"
-    else
-        echo -e "   2. 检查 HMAC_SECRET: grep '^HMAC_SECRET=' /opt/ip_sentinel/config.conf"
-        echo -e "   3. 检查升级日志: cat /opt/ip_sentinel/logs/ota_upgrade.log 2>/dev/null"
-        echo -e "   4. 确认 Master 端节点在线后，清理备份: rm -rf ${backup_path}"
+    echo -e "   1. 在 TG 中发送 /start 确认 Master 面板显示新版本"
+    echo -e "   2. 发送 /nodes 查看节点列表及 Agent 版本号"
+    if $HAS_AGENT; then
+        echo -e "   3. 检查 HMAC_SECRET: grep 'HMAC_SECRET' /opt/ip_sentinel/config.conf"
     fi
-    echo -e ""
+    echo -e "   4. 确认无误后清理备份: rm -rf ${backup_path}"
+    echo ""
     echo -e "📦 备份保留在: ${backup_path}"
-    echo -e "   如需回滚，参考上述手动回滚命令。"
+    echo -e "   如需回滚，可手动从备份恢复。"
 }
 
 # ==========================================================
@@ -452,25 +476,41 @@ main() {
     check_root
     check_network
     check_commands
-    detect_role
+    detect_roles
 
     do_backup
 
     confirm_upgrade
 
-    if do_upgrade; then
-        local verify_errors=0
+    local upgrade_ok=true
+    local verify_errors=0
+
+    # 升级顺序: Master 优先 → Agent 随后
+    if $HAS_MASTER; then
+        if ! upgrade_master; then
+            upgrade_ok=false
+        fi
+    fi
+
+    if $HAS_AGENT && $upgrade_ok; then
+        if ! upgrade_agent; then
+            upgrade_ok=false
+        fi
+    fi
+
+    if $upgrade_ok; then
         do_verify || verify_errors=$?
         print_summary
+
         if [ "$verify_errors" -gt 0 ]; then
             echo ""
-            warn "验证发现 ${verify_errors} 项错误，建议检查日志或手动回滚。"
+            warn "验证发现 ${verify_errors} 项异常，建议检查日志。"
         fi
     else
         echo ""
         error "升级执行阶段失败。"
-        echo -e "💡 备份位于: $(cat /tmp/.ip_sentinel_backup_path 2>/dev/null || echo '未知')"
-        echo -e "💡 请按照上方提示手动回滚。"
+        echo -e "💡 备份位于: ${BACKUP_DIR}"
+        echo -e "💡 请根据上面的回滚提示手动恢复。"
         exit 1
     fi
 }
