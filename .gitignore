@@ -1,3 +1,9 @@
+# 项目管理外壳
+node_modules/
+.zcode/
+fork/
+audit/
+
 # Environment & secrets
 .env
 .env.*
