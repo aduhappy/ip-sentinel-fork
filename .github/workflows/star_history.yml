@@ -1,0 +1,102 @@
+name: Generate Star History
+
+on:
+  schedule:
+    - cron: '0 0 * * *' 
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Generate Star History SVG (Pure Local)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install matplotlib requests
+          
+          python3 - <<'PYEOF'
+          import requests, os
+          import matplotlib.pyplot as plt
+          import matplotlib.dates as mdates
+          from datetime import datetime
+
+          token = os.environ['GITHUB_TOKEN']
+          repo = '${{ github.repository }}'
+          headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github.v3.star+json'}
+          url = f'https://api.github.com/repos/{repo}/stargazers?per_page=100'
+          dates = []
+
+          while url:
+              r = requests.get(url, headers=headers)
+              if r.status_code != 200:
+                  break
+              data = r.json()
+              if not data:
+                  break
+              for star in data:
+                  if 'starred_at' in star:
+                      dates.append(datetime.strptime(star['starred_at'], '%Y-%m-%dT%H:%M:%SZ'))
+              url = r.links.get('next', {}).get('url')
+
+          if dates:
+              dates.sort()
+              counts = list(range(1, len(dates) + 1))
+              dates.append(datetime.utcnow())
+              counts.append(counts[-1])
+              
+              # ==========================================
+              # [视觉升级] 注入 GitHub 官方暗黑模式 UI 规范
+              # ==========================================
+              bg_color = '#0d1117'      # GitHub 暗黑底色
+              text_color = '#c9d1d9'    # GitHub 亮灰字体
+              grid_color = '#30363d'    # GitHub 边框网格色
+              line_color = '#2ea44f'    # GitHub 经典成功绿
+              
+              fig, ax = plt.subplots(figsize=(10, 5), facecolor=bg_color)
+              ax.set_facecolor(bg_color)
+              
+              # 设置字体颜色与坐标轴颜色
+              ax.tick_params(colors=text_color)
+              ax.xaxis.label.set_color(text_color)
+              ax.yaxis.label.set_color(text_color)
+              ax.title.set_color(text_color)
+              
+              # 设置边框颜色
+              for spine in ax.spines.values():
+                  spine.set_edgecolor(grid_color)
+                  
+              # 绘制核心趋势线与阴影填充
+              plt.plot(dates, counts, color=line_color, linewidth=2)
+              plt.fill_between(dates, counts, color=line_color, alpha=0.1)
+              
+              plt.title(f'{repo} Star History', fontsize=16, color=text_color, pad=15)
+              plt.ylabel('Stars', fontsize=12, color=text_color)
+              
+              # 设置网格虚线
+              plt.grid(True, linestyle='--', alpha=0.5, color=grid_color)
+              plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+              plt.gcf().autofmt_xdate()
+              plt.tight_layout()
+              
+              os.makedirs('data', exist_ok=True)
+              # 强制应用背景色，关闭透明度，打破隐形诅咒
+              plt.savefig('data/star_history.svg', format='svg', facecolor=bg_color, transparent=False)
+              print("✅ [Success] 极客暗黑风 SVG 渲染完毕！")
+          PYEOF
+
+      - name: Commit & Push Changes
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/star_history.svg
+          git commit -m "style: 修复暗黑模式下坐标轴隐形问题，采用 GitHub 原生深色主题渲染图表" || exit 0
+          git push origin main

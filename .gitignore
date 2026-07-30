@@ -1,4 +1,6 @@
-node_modules/
-.zcode/
-fork/
-audit/
+# Environment & secrets
+.env
+.env.*
+.env.d/
+*.env
+!*.env.example

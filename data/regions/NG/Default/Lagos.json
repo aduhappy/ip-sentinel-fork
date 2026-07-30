@@ -1,0 +1,55 @@
+{
+  "region_name": "Nigeria - Lagos",
+  "google_module": {
+    "base_lat": 6.5244,
+    "base_lon": 3.3792,
+    "lang_params": "hl=en-NG&gl=NG",
+    "valid_url_suffix": "com.ng"
+  },
+  "trust_module": {
+    "white_urls": [
+      "https://news.google.com/rss/articles/CBMitgFBVV95cUxQOXBMd1FvTUZ1VEpjNmhtRUtJbGJXc2JvNDVyRGRZdTFPemphc1FmenBvd2E3MDZzeU5sUnRvclNlNUUwUU9sWXQ0VnVBd0lTMTY3a1dUdDhwTGJWQnRpUERnYm1jOGlQTDFtYW85V2Etd1UtcFZQSzRJVlp1b3B2ZUVTVGlEOXRoYnVGQWRXZFV6SVFZeGVwSW9IXzBfS2hQSHRKOElHQ1BHc0laOUtuT2lKQ1pEZw?oc=5",
+      "https://news.google.com/rss/articles/CBMilwFBVV95cUxNLW9yOFEwY0cwdk41aDItYTB4aTBFRlltOTR4NjlWZDdycEI5UnktRzd4SFFGcTNBOWcyQVhST0xQb3FLWnA4Z056UEdXRjhMUUFBdEdmd2l6NjlLbU9yUG9Xbk45allxVGlaN0ZUbWhmaHdCNk1IZnVrdHRqV0E2TFRiVzJ3eVc2VWkyOFRZYlZuLS0wWkx3?oc=5",
+      "https://news.google.com/rss/articles/CBMiywFBVV95cUxPM1lzOU5rSk9ieDNpWGNFUGlaUmdNNFQxUGV1V1l3TlpBYnpuU0hweFJrRnJIRFU5Z1Z2ZHliZjJHYlp5Qi1IcTBJcGFjY0FRbGRiTTNfLXRNRHFTdzF0UUl1YzF3QjJoY0taU0V1ellGREp4eTg1Qk5XOW1ELXNlNlF2eVJRenB2YUo1ektLbmozekwyVHl3cFlmSmdhak9HMEZFY1lUcVBfekhlOFI3bzZNYVZDNWtJb0pqUEhlMDRhR1p3NDdoSmZFRQ?oc=5",
+      "https://news.google.com/rss/articles/CBMilgFBVV95cUxNLThyOTM0UlNwSnNhMkhGLXJtSVhsUDkyWHg1NWVmSkZ4MlNOQ3paZDlWOS1FR29ZRWpUSS1CemJkMGlWWVVETVFRMElxM3NnMW9KS1VSVzBVS3NmYkZMTmJESjZrMlFJYTd1YVYycENnbmk3TVZiNGFZVGEzbHhORl9lOFVIZzgyajVLOU1COWdtVk9YQ1E?oc=5",
+      "https://news.google.com/rss/articles/CBMingFBVV95cUxQcl9TcFlBbTZ2aWg2eURFOWZTQTNab19WNHN4VU1meWVhUUZaWWhHMFU5NnFRSDdNZFhYT2djUVkySWZhd29nb0hTVDhjei1uTVQzMkFvUmk3czhiMTUySDhwYmlLejNYWFp5Q1FjSFNNY3J1ekxIbUc3UUt3NTFjajFtUnVfd3Y0bk5ycWRNcEVtV1FSX2xhLWlFTGk3UQ?oc=5",
+      "https://news.google.com/rss/articles/CBMiywFBVV95cUxQWlJ6TmlJS1kyWlhGMThPWGxSZ004aDZpYl8waVl0UFdTRVplMVJBTGNncWJfNnV3ZXA0WTBUNHVtM0pLMHBUTXk5Y2NDTm90MnlPVGtXd0p0TUhiZXlVYXhrN1ZDcVIyOTZGWWpYSVhYR05MbHhnVDI4ellDQkhmdFktY0lueldOOEIwSHFob1pFQkpJcC1iUG9SMEphMmp5YXgxRWFVanRqeXJDeTNEQVRUS0VDd0NTZl9md2ZDUkZTRXl6S19uV2dXWQ?oc=5",
+      "https://news.google.com/rss/articles/CBMinwFBVV95cUxNM1h4UHBmZUdFTzd1ZU9kdWFzQmJQZWsySzFGMVNTMFdnS0R1a1FCS3ZnQWdpRlBaUkVXUGZ6NlhmamdJWFVkdEVBWVl0SnNTMzVKU3JPWXRBcTgyUm5PLTNvOVozeDNtQ3A4WlZwdy1DWEt5TGtOTFFHMTR3bEtmLXBleTItTDhWc0x5dGdFVDdUcXBXZFJRQWFoblJWcXc?oc=5",
+      "https://www.mtn.ng/",
+      "https://www.gtbank.com/",
+      "https://news.google.com/rss/articles/CBMigwFBVV95cUxQOGNCcFBZWFlaQ3UwZzlHak1JMUNoNzNMU3ZGdjltNjNFby1lZzdZV21OazFPZEtVZzlhRmVMUHo4UURZakFzZ1FmUE1qaGdETGhXcHpqVzhWZmcxeWduSmVrbEpRSXJJV1VvdVR1ei1TWXllRTFNY0E5b1MtcGVGaHQtdw?oc=5",
+      "https://news.google.com/rss/articles/CBMiswFBVV95cUxNU3lKNGpaWG9BUFdPY2JmenBEZWpjclBwb0dUb3JmN0FJWHpkRl9iYnpGcUhURWo0bjlkcW8tS2dZRXNhdGJfci1HSmFmb3NlakRvdktRRXhZWWZWWWZzbEVnWW5VYVd3VHlLRG9qZ0ZsZVFGcWlsLUpnQzNPMFdxTl9ZckN0RzRwYUZ4OHRWenBtSkVjYmMxU3k2enRJUFpIZ3hzREJ5S19lN0ZPREx5MGI1OA?oc=5",
+      "https://news.google.com/rss/articles/CBMifEFVX3lxTE5qU2xmQkh3Ykpfak80WmhuZlJkY0RaanpHS0xSVGdLM2hZNmFleW85ckhnRk9NakJVLXBCUFM1bG1iUURmTnhNbHpNV2IzcHNCN2ZaRC1UV1hEbWd1NHBZbDV2aXE0WFZiTWJaRFgyck02dEYwTEpKTWotWm0?oc=5",
+      "https://news.google.com/rss/articles/CBMizgFBVV95cUxPYm9rdC1tQ3FrRnNCT2o1UGlRYUQxUEtvUllMM2dKQWpJN1lRbjk4LU9WekhPZ1FSeTJMbWI4cTc5QjVnTzlzcm8xYTB6RkVYTHdsYmF5TjNKQlNWSWFZdzcwVFh0bkNTUTVDWE1SREQwVjgwVjUtTzE0cDFoZy1NX2pRdnZ4Vmk3bnRTZElHWDFVUk1jTnIwV1phSHVjUF9FUnczR1dxU3ZYVHhlbTA5WloyUFpvQmZMM3RlT05GcWpmeDN4Q0tRYURWblN0QQ?oc=5",
+      "https://news.google.com/rss/articles/CBMitwFBVV95cUxNYnFCTm9TakRGQVF2X09oSl9ZeVVzMG5aamhoVEJ1VXNQNkw3TkdGMG9mMDVieXg2MGV1R2k1aXlRdUl4WHZ4dkQxaElpdlVuendvdWpLQXN5ZzJyVnJheDNHcUk0cGdVZGNDQzJuRjlWMjMtMXdRRVBCTHd0SkZLZDk3WndaNEdCRWtPS1NPbnpFS2hwVEo2bEVwVHZkblJaZlNwbVUwUjJld1p0WVlKdWJ0bF95eGc?oc=5",
+      "https://news.google.com/rss/articles/CBMikwFBVV95cUxPZW04YkZLRDkwUzh5Xzc5VGNwT2NVN3hsNkpWcVk3QjREdzVDUlVRdnljNjh5RjdJYml1bi1kRlpRa3BXdnFTMmlUMTJiUlhySjJKbGo2UUwzR0xWUWwybHNvZ0tlbktoR3lmczM4X3Rvc1dWdHFIYzFzVC1PNjBUN3FBYzhQNV9pWndING1ZRGUzSm8?oc=5",
+      "https://news.google.com/rss/articles/CBMivwFBVV95cUxPbXktTldnZkpKbXh1d2VpaEkzV3d5eVlwRjVyYm1QR0Jsb2xDTHVqY0xscGFyNDdldVNBR1g3aUlIRC1MNHRQbVdHU2VvYWJOM0oyVWtONE55d19yZGVNUG5BQU04RjJ5STV5Z1NwblY0WmNOenJqNDgweVRtbFVKVFBrVVUzLU85YWZiSE56XzBPYTJCVnliRlhpdVFzVVdRcWd6eWNxaHo1UzM0MnFvRWJpWWlJOUo4YnFfUzBTNA?oc=5",
+      "https://news.google.com/rss/articles/CBMikAFBVV95cUxOdjlZckxDRjM2dzNUY19sQ2NNb3NhZHRfVHF3RnA2MUlLNXBiREtncmZvRlNyNURzczNvajJUUXh2RWpRM0V3ZVNjUGptLU1KYXV1ZmZNVFQ1NHFyZDlncHZmVzd2NWd2UnNpM2Y4R0NpZ3Fqc3NadWY4bVFMcU1ET0VYRjQ4WTlaZW5XTUE4MzU?oc=5",
+      "https://news.google.com/rss/articles/CBMiuwFBVV95cUxONWJQenVlMUQxTTZPNno5TDV6d2xHQmlOYkxQYmNBWllvdk1yWGt0Z1VRd3Bab3l6akFWajBQaWF0d2hpRVFBNGl0WklxdlIwU185ZV8zVUl1LXVwYWN3SnlPS0htM21YdnJ3ZHhvcGg4UU4tdzlZai05SC1oME5Obmp1MzY2ZERjVERCVTFJUzhSWnFWc2hWWFRYQ0Y5NUZwV0tvdlZmLTl0OEg0LXBrQTg0NHlKa043NDc00gHAAUFVX3lxTE1acExGTUt4VXRVTGZ2TUh1RXZOZGt3MF9tWG5mMWZQdGhnQzJ6Y3N6SlhVaEk0Z1F6RmNwY2toRU1EVm9yUjRDc2V5bE4yeWRJMGEzQXNPV2ZBLWZ5SEVXbF9RYXRXM210SGVNenVFb3otc0laTGE1WkswTW1hQ3c1ZnpCLV9YWXhNUFVwcGN2YzZkMlQxSHEzYlJTMFN3OXdjSXUwVHpFRExOOU9RNUtKdVlmZE1taUo0RjZnQ2F5Yg?oc=5",
+      "https://news.google.com/rss/articles/CBMitAFBVV95cUxNNGU2LUlZRExkRHVhUG83MEZNQm16TEoyV2h1cFBQVzY0RlRETjdBc1lZSlVpR3Y4RlZod19wZEJiWDRpaFZMekJ4NHRsVUZoYmU2N2c0b3lqSUZyVFdFZUV2NWRoZXVHdUZRWmhIbFR5ZXl1VzdNVHpBTUJfWDNCQ1pzZnZ6bkxpR3o4WFkyaFFfNV91TURpVkZEQVk3b2tUYmlxRzlKdmpENmJrVGJJdjJZd2vSAboBQVVfeXFMTXg2SGVMal9xc25tQ0djOHE0YTBlVzlqMDVockNpMXZ0d19RcWQ5eXNFQmRHaFZ6cmhFXzhqX29tOF9Xd0RQa1M1SzdZYy1UTkFyNmF3QlEzcUZDYUpxWnpXWkRUaUR5ZU50ekpkY0ZYWE9IWmZiTUU2SmNqWWNGU1VsSklrVnZrWXN4N181eGp3MXZ0SXJ0VC1rWUtJREZkM3ZnbWlWejlKU0h0d1hqbXZBUXdGOUtnZEVR?oc=5",
+      "https://news.google.com/rss/articles/CBMiowFBVV95cUxQQm1PMTl6RmpCNFVnREZ6WGQ0QWZoTlJOR2pVSERNS2hpalhiQVkzZ2JZVjN1ZEc0NHFUSUtUYlF4WEZfQXR3WXo0bVMxUnc2OWpId3h0eHpybGFSR3RuSENpVkk3ZVRSZmEtSmJOWTBhNXpnLVpTeGFOTEtidTVlQlNXbFdKVUNaMEZOQU9adVFEb0RCdXZ2ZWJMb2lRbFUzRF93?oc=5",
+      "https://news.google.com/rss/articles/CBMipAFBVV95cUxNV2Y0QmVNb0hZNnpMTEc4NU9FRUZlYTZqVllkWjRobWZ4c2Fvc1U2YzhOV2h1dWJjM19kbDg3dDliUTB3dWxhTnNCWEFVekN6V192Rk9uVm04Q0QxNXdUaHUwZmluMnBMUmk4Y0xTQ3prdWowcjd4UVE5Z3R2LXBLUVFHREJHVjVrMXlUel90eWZBdXdhbktBaVBkaWhjTG1uTXIyZQ?oc=5",
+      "https://www.punchng.com/",
+      "https://news.google.com/rss/articles/CBMingFBVV95cUxOX2hrUGtXVmFwdWY3LW5KYnZQeWZibWhGOHRORnh6RnB1OXFHU2g0SzJVb2pGMGsxel9MTm43Rk1oU3FaQzRUbExWb3BtVW5BTTA2Nk1GYUExejlhYnR1WEF2SHdaWTU4bERQd2NGTXg4NlNuVHlZbm9MN0tWLTQxRWdOX29NMlp2Nk5XelE5MEdRM0xhWFJYRExteHVnUQ?oc=5",
+      "https://news.google.com/rss/articles/CBMitgFBVV95cUxNa1U4dnR6YWFEaVFib0NxMDVZc0xCSnRNR1REaGQ4YkwwS2NodGpyajR1TlZfeVhVWGNRYmdveEpDZWxhZGZ5c3lXVWpVbGFaR3dzcURDeVRtR2t4NlgzcFFwVlY5QVR0TTdpX2dEZUZneGJqQmY4MDJzanVxbHNJdi1IOEFCZ0hkeFJSamluQ1VUUWhzalpRdkhNMHBIbndVd0ZUZ2s4Zkk1ZkZsdzZGT2cyVlh1UQ?oc=5",
+      "https://news.google.com/rss/articles/CBMiiAFBVV95cUxQOW5oNmozSWRCYTFBallyUG5GaVBZbXBjZi1ub2Vnd3V6WGlNVkxiYlBnRzZndmpQc3dyOTh3TG1LaGhzdVRwbGJvZlp6NjEtWF9MYzZnU2dlemJjR0tmNEljbXpfRXJfcEwtcktGaHZRNkV1UmpWQmdGQVNTRUlfXzZ3TzBMWVFn?oc=5",
+      "https://news.google.com/rss/articles/CBMilAFBVV95cUxPMzQwLXdhdEJHUEdSYVl0NkhGaFR1andoazdTd1B3OWhmM3NnanJoWHhPRGNPZzJ5U09DUW9XMGJqbE9PRmNPcTA3akh5QWdvYV9MVVdIYUtWOHNPa0x3S182YXcxRlF0bFFKamt2T1d4Z3FRcm5fMUVROEY3UE9uTS1iMXZVQjdlQlVvbzdnOFVuRGJj?oc=5",
+      "https://news.google.com/rss/articles/CBMilgFBVV95cUxQRDlhTERsa2tBbmxhZ0hhMGZOdEhUZUdtVU0zLW9CVlFDSmJpQUkyZTE0RVRfdXpDX1JOcWh0VDgyZUFsWWlnOE01eFB0WHdHcEw5allXYkF0TU5zNFBsMFhZQm10UDVIc241NS1rQmxxREZZTHBTWXlaWkRNamNWTFNrNDRDZ3l2OTBVaTJ0eTF3NDlnVEE?oc=5",
+      "https://guardian.ng/",
+      "https://www.konga.com/",
+      "https://news.google.com/rss/articles/CBMinAFBVV95cUxPdDJzWUR1TXh6YjhXc3dtcnNiWHJLbVlFd05URm52RU9ndFVtZ05GTU9SZnNVY2plRFNsc2J1eUtDSnM3U1hweUp3UzZHclVncGo5UDE1ekFINEZvdGxGT3IzN2RpT2Y4ZlFMRHNyZFVsRHNpdnNqc3pDZjlJZW5NWnMtM01QTUREdHlmZUJneU9MSE1BNVZOSDlQVTc?oc=5"
+    ],
+    "static_urls": [
+      "https://www.vanguardngr.com/",
+      "https://www.punchng.com/",
+      "https://www.nairaland.com/",
+      "https://www.gtbank.com/",
+      "https://guardian.ng/",
+      "https://www.firstbanknigeria.com/",
+      "https://www.mtn.ng/",
+      "https://www.airtel.com.ng/",
+      "https://www.konga.com/",
+      "https://www.jumia.com.ng/"
+    ]
+  }
+}
