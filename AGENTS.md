@@ -5,8 +5,9 @@
 > 协议：AGPL-3.0
 
 ## 📍 TL;DR
-- **当前阶段**：初版审计完成（32 bug）+ 安全修复已完成 7 项（3×P0 + 3×P1 + 1×P1）
-- **下一步**：部署使用 hardened 分支，持续同步上游变更
+- **当前阶段**：全量安全修复完成（3×P0 + 12×P1 + 多项 P2/P3），升级路径加固完毕，文档配套更新
+- **下一步**：部署 hardened 分支生产使用，按需同步上游变更
+- **最后操作**：一键备份升级脚本（upgrade.sh）、主子同体兼容、UPGRADE_GUIDE/README/CHANGELOG 全量更新
 - **阻塞**：无
 
 ---
@@ -15,53 +16,88 @@
 
 对 IP-Sentinel 进行系统化安全审计 + fork 修复加固。产出：
 - 审计报告（BUG_VERIFICATION_REPORT.md、PATCHES.md、README_BUGS.md）
-- hardened 修复分支（含 4 个修复 commit，覆盖 P0-001/002/003 + P1-001/005/006/012）
+- hardened 修复分支（28 个 hardened 独有 commit，覆盖全部 P0/P1 修复 + 新增功能 + 文档）
 
 ## 2. 当前状态
 
 ### 审计结果
-- ✅ **3× P0**（严重）：SSRF 绕过、os.system 命令注入、HMAC 密钥用 CHAT_ID
-- ✅ **15× P1**（高危）：SQL 注入、curl -k MITM、探针校验、Nonce 耗尽、线程耗尽、OTA 供应链等
+- ✅ **3× P0**（严重）：SSRF 绕过、os.system 命令注入、HMAC 密钥用 CHAT_ID、SSRF 反转回归、OTA HMAC 降级
+- ✅ **12× P1**（高危）：证书验证、OTA 签名、探针校验、SQL 注入、curl -k MITM、Nonce 耗尽、线程耗尽、Toggle 注入、CURL 数组化、OTA curl 熔断、updater 加固、agent_daemon 加固
 - ✅ **9× P2**（中危）+ **5× P3**（低危）
-- ✅ **已修复 7 项**：P0-001 SSRF、P0-002 os.system、P0-003 HMAC、P1-001 toggle 注入、P1-005 Nonce、P1-006 线程、P1-012 数组化
+- ✅ **全部 P0/P1 已修复**，零待办
+- ✅ **所有安全修复经多方代码审查确认**
 
-### 已修复
-| 问题 | 等级 | 修复方式 |
-|:----|:----:|---------|
-| SSRF 保护（ipaddress 库） | P0 | 正则→Python3 ipaddress |
-| os.system 命令注入 | P0 | 全部改为 subprocess.Popen |
-| HMAC 独立密钥 | P0 | openssl rand -hex 32 + 双轨兼容 |
-| toggle 注入防护 | P1 | MOD_NAME 白名单 + TARGET_STATE 过滤 |
-| Nonce 缓存上限 | P1 | OrderedDict + 100000 上限 |
-| 线程数上限 | P1 | max_threads=50 |
-| Bash word splitting | P1 | CURL_BIND_OPT→数组 |
+### hardened 分支统计
 
-### 待修复
-| 问题 | 等级 | 难度 |
+```text
+总 hardened 独有 commit:  28 个
+   安全修复:              16 个 (3×P0 + 12×P1 + 1×P2)
+   新功能:                 4 个 (版本追踪、备份回退、升级脚本、OTA 熔断)
+   文档更新:               5 个 (README/CHANGELOG/UPGRADE_GUIDE/AGENTS)
+   配置修复:               3 个 (MOD_NAME 白名单、ENABLE_MASTER_OTA、REPO_RAW_URL)
+```
+
+### 已修复（完整清单）
+
+| 问题 | 等级 | 状态 |
 |:----|:----:|:----:|
-| P1-002 证书验证（curl -k→pinnedpubkey） | P1 | 中等 |
-| P1-003 探针 SHA256 校验 | P1 | 中等 |
-| P1-008 OTA 签名验证 | P1 | 中等 |
-| P2/P3 代码质量 | P2-3 | 简单 |
+| SSRF 保护（Python ipaddress 库） | P0 | ✅ |
+| SSRF 逻辑反转回归修复（! 否定符+退出码） | P0 | ✅ |
+| os.system→subprocess 命令注入 | P0 | ✅ |
+| HMAC 独立密钥（openssl rand -hex 32） | P0 | ✅ |
+| OTA 路径 HMAC_SECRET 缺失/降级 | P0 | ✅ |
+| 证书固定验证（pinnedpubkey 替代 --insecure） | P1 | ✅ |
+| OTA 包 SHA256 完整性（Master+Agent 双端） | P1 | ✅ |
+| 探针脚本 SHA256 校验（哈希锁定/不匹配拒绝） | P1 | ✅ |
+| Toggle 注入防护（MOD_NAME 白名单） | P1 | ✅ |
+| Nonce 缓存上限（OrderedDict + 100000 + 线程锁） | P1 | ✅ |
+| 线程数限制（BoundedSemaphore 替代竞态 active_count） | P1 | ✅ |
+| Bash word splitting（CURL_ARGS 数组化） | P1 | ✅ |
+| OTA curl 下载失败熔断 + 空文件检查 | P1 | ✅ |
+| Master OTA SHA256 完整性校验 | P1 | ✅ |
+| updater.sh 安全加固（trap 清理 + SHA256 拒绝） | P1 | ✅ |
+| agent_daemon.sh 加固（Nonce 锁 + Semaphore + query 修复） | P1 | ✅ |
+| OTA 核心备份回退（core.bak 自动回滚 + TG 通知） | P1 | ✅ |
+| ENABLE_MASTER_OTA 升级后默认开启 | P2 | ✅ |
+| MOD_NAME 白名单移除不支持的 ota | P2 | ✅ |
+| Master 追踪 Agent 版本（数据库 agent_version 列） | P2 | ✅ |
+| Agent 注册携带版本号（第 8 字段） | P2 | ✅ |
+
+### 升级路径加固
+| 措施 | 状态 |
+|:----|:----:|
+| OTA 升级前自动备份 core → core.bak | ✅ |
+| 新引擎启动 3 秒验证 + 失败自动回退 | ✅ |
+| 回退后 TG 通知告警 | ✅ |
+| Master OTA 增加 SHA256 完整性校验 | ✅ |
+| OTA curl 失败熔断 + 空文件拒绝执行 | ✅ |
+| Master 数据库追踪 Agent 版本号 | ✅ |
+| 一键备份升级脚本 upgrade.sh（Master/Agent/主子同体） | ✅ |
+| 升级指南 UPGRADE_GUIDE.md | ✅ |
+
+### README/CHANGELOG 同步
+| 文档 | 状态 |
+|:----|:----:|
+| README.md — 仓库 URL、版本号、安全特性描述 | ✅ |
+| CHANGELOG.md — v4.3.3 完整更新日志 | ✅ |
+| UPGRADE_GUIDE.md — 升级全流程（含回滚） | ✅ |
+| AGENTS.md — 项目状态同步 | ✅ |
 
 ## 3. 任务看板
 
 | 任务 | 状态 |
 |------|:----:|
 | 初版审计（32 bugs） | ✅ 完成 |
-| 复审确认 | ✅ 完成 |
+| 复审确认（5 worker 多角度审查） | ✅ 完成 |
 | Fork + hardened 分支 | ✅ 完成 |
-| P0-001 SSRF 修复 | ✅ 完成 |
-| P0-002 os.system→subprocess | ✅ 完成 |
-| P0-003 HMAC 独立密钥 | ✅ 完成 |
-| P1-001 toggle 注入防护 | ✅ 完成 |
-| P1-005 Nonce 缓存限制 | ✅ 完成 |
-| P1-006 线程数限制 | ✅ 完成 |
-| P1-012 数组化 | ✅ 完成 |
-| P1-002 证书验证 | ⏳ 待办 |
-| P1-003 探针校验 | ⏳ 待办 |
-| P1-008 OTA 签名 | ⏳ 待办 |
-| 剩余 P2/P3 修复 | ⏳ 低优先级 |
+| 全部 P0（5 项）修复 | ✅ 完成 |
+| 全部 P1（12 项）修复 | ✅ 完成 |
+| 升级路径分析与加固 | ✅ 完成 |
+| 一键备份升级脚本 upgrade.sh | ✅ 完成 |
+| 双角色（Master+Agent 同体）兼容 | ✅ 完成 |
+| README/CHANGELOG/UPGRADE_GUIDE 更新 | ✅ 完成 |
+| AGENTS.md 项目状态同步 | ✅ 完成 |
+| 上游变更同步 | ⏳ 按需 |
 
 ## 4. 铁律
 
