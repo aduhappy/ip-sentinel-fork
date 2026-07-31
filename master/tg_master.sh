@@ -287,7 +287,7 @@ try:
        ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         sys.exit(0)
     sys.exit(1)
-except:
+except ValueError:
     sys.exit(0)
 " 2>/dev/null; then
                     send_msg "$CHAT_ID" "⛔ **安全拦截**：禁止注册内网/回环/保留 IP，防止 SSRF 攻击渗透。"
