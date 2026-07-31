@@ -17,7 +17,7 @@
 
 对 IP-Sentinel 进行系统化安全审计 + fork 修复加固。产出：
 - 审计报告（BUG_VERIFICATION_REPORT.md、PATCHES.md、README_BUGS.md）
-- hardened 修复分支（28 个 hardened 独有 commit，覆盖全部 P0/P1 修复 + 新增功能 + 文档）
+- 安全加固分支（28 个加固 commit，覆盖全部 P0/P1 修复 + 新增功能 + 文档，已并入 main）
 
 ## 2. 当前状态
 
@@ -29,10 +29,10 @@
 - ✅ **所有安全修复经多方代码审查确认**
 - ✅ **双层仓库已简化为单仓库**（主仓库→origin/aduhappy/ip-sentinel-fork）
 
-### hardened 分支统计
+### 安全加固分支统计（原 hardened 分支）
 
 ```text
-总 hardened 独有 commit:  28 个
+总加固 commit:             28 个
    安全修复:              16 个 (3×P0 + 12×P1 + 1×P2)
    新功能:                 4 个 (版本追踪、备份回退、升级脚本、OTA 熔断)
    文档更新:               5 个 (README/CHANGELOG/UPGRADE_GUIDE/AGENTS)
@@ -91,7 +91,7 @@
 |------|:----:|
 | 初版审计（32 bugs） | ✅ 完成 |
 | 复审确认（5 worker 多角度审查） | ✅ 完成 |
-| Fork + hardened 分支 | ✅ 完成 |
+| Fork + 安全加固分支（原 hardened，已并入 main） | ✅ 完成 |
 | 全部 P0（5 项）修复 | ✅ 完成 |
 | 全部 P1（12 项）修复 | ✅ 完成 |
 | 升级路径分析与加固 | ✅ 完成 |

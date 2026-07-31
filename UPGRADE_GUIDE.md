@@ -1,20 +1,20 @@
-# IP-Sentinel 部署升级指南 — hardened 安全增强分支
+# IP-Sentinel 部署升级指南 — 安全加固分支
 
-> **本文档面向已部署原版 IP-Sentinel (hotyue/IP-Sentinel) Master/Agent 的用户，指导如何升级到安全加固的 `hardened` 分支 (aduhappy/ip-sentinel-fork)。**
+> **本文档面向已部署原版 IP-Sentinel (hotyue/IP-Sentinel) Master/Agent 的用户，指导如何升级到安全加固的 `main` 分支 (aduhappy/ip-sentinel-fork)。**
 
 ---
 
 ## 1. 概述
 
-### 1.1 hardened 分支与原版的关系
+### 1.1 安全加固分支与原版的关系
 
-| 维度 | 原版 (hotyue/IP-Sentinel `main`) | hardened 分支 (aduhappy/ip-sentinel-fork `hardened`) |
+| 维度 | 原版 (hotyue/IP-Sentinel `main`) | 安全加固分支 (aduhappy/ip-sentinel-fork `main`) |
 |---|---|---|
 | **代码基础** | 上游主线，功能持续迭代 | 基于上游 v4.3.x 的 fork，追加安全补丁 |
 | **安全修复** | 无专门安全审计 | 已修复 7 项安全漏洞（含 3 项 P0 高危） |
 | **API 兼容** | 基准 | 完全向后兼容，HMAC 双轨密钥确保旧 Agent 可注册 |
 | **运维方式** | 仅 SSH 手动升级 | 支持 OTA 远程静默升级（Master 端优先级更高） |
-| **安装源** | `raw.githubusercontent.com/hotyue/IP-Sentinel/main` | `raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened` |
+| **安装源** | `raw.githubusercontent.com/hotyue/IP-Sentinel/main` | `raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main` |
 
 ### 1.2 已修复的安全问题清单
 
@@ -103,10 +103,10 @@ grep "^MASTER_VERSION=" /opt/ip_sentinel_master/master.conf 2>/dev/null || echo 
 # 检查当前 Agent 版本
 grep "^AGENT_VERSION=" /opt/ip_sentinel/config.conf 2>/dev/null || echo "未安装 Agent"
 
-# 检查 hardened 分支最新版本
-curl -sfL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/version.txt
+# 检查 main 分支最新版本
+curl -sfL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/version.txt
 
-# 检查安装源指向（确认是否已指向 hardened 分支）
+# 检查安装源指向（确认是否已指向 main 分支）
 grep "REPO_RAW_URL" /opt/ip_sentinel/core/*.sh 2>/dev/null | head -3
 grep "REPO_RAW_URL" /opt/ip_sentinel_master/tg_master.sh 2>/dev/null
 ```
@@ -119,7 +119,7 @@ grep "REPO_RAW_URL" /opt/ip_sentinel_master/tg_master.sh 2>/dev/null
 | openssl 可用 | `command -v openssl` | 输出路径 |
 | curl 可用 | `command -v curl` | 输出路径 |
 | root 权限 | `whoami` | `root` |
-| 网络连通 | `curl -sfL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/version.txt` | 输出版本号 |
+| 网络连通 | `curl -sfL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/version.txt` | 输出版本号 |
 | SQLite3 可用 | `command -v sqlite3` | 输出路径（Master 节点必检） |
 | 磁盘空间 | `df -h /opt` | 剩余 >= 100MB |
 
@@ -136,7 +136,7 @@ grep "REPO_RAW_URL" /opt/ip_sentinel_master/tg_master.sh 2>/dev/null
 直接在 Master 服务器上以 root 用户执行：
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/master/install_master.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/master/install_master.sh)"
 ```
 
 #### 安装过程的行为说明
@@ -150,7 +150,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-for
    - `ENABLE_MASTER_OTA` — 默认为 `false`
    - `MASTER_NODE_NAME` — 自动生成节点别名
 5. **版本号更新** — `master.conf` 中的 `MASTER_VERSION` 会自动更新为最新版本。
-6. **核心脚本覆写** — `tg_master.sh`、`install_master.sh` 等脚本会被覆盖为 hardened 版本。
+6. **核心脚本覆写** — `tg_master.sh`、`install_master.sh` 等脚本会被覆盖为安全加固版本。
 7. **systemd 服务重载** — 如果使用 systemd，会自动重载并重启服务。
 
 #### 交互流程示例
@@ -180,8 +180,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-for
 # 创建临时工作目录
 mkdir -p /tmp/ip-sentinel-master-upgrade && cd /tmp/ip-sentinel-master-upgrade
 
-# 下载 hardened 分支的 Master 相关文件
-BASE_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
+# 下载 main 分支的 Master 相关文件
+BASE_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 curl -sfLO "${BASE_URL}/master/install_master.sh"
 curl -sfLO "${BASE_URL}/master/tg_master.sh"
 curl -sfLO "${BASE_URL}/master/uninstall_master.sh"
@@ -206,7 +206,7 @@ cp -ra /opt/ip_sentinel_master /opt/ip_sentinel_master.bak.$(date +%Y%m%d)
 
 # 3. 解压文件到临时目录并执行安装
 cd /tmp/ip-sentinel-master-upgrade
-export REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
+export REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 export SECURE_TMP="/tmp/ips_master_upgrade"
 export TARGET_VERSION=$(grep "^MASTER_VERSION=" version.txt | cut -d'=' -f2)
 mkdir -p "$SECURE_TMP"
@@ -258,7 +258,7 @@ systemctl status ip-sentinel-master.service 2>/dev/null || pgrep -fl tg_master.s
 #### 命令
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/install.sh)"
 ```
 
 #### 安装引擎会自动保留原有配置
@@ -289,10 +289,10 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-for
 
 #### 前置条件
 
-- [ ] Master **必须先升级** 到 hardened 分支（否则 Agent 虽可升级但 OTA 功能不完整）
+- [ ] Master **必须先升级** 到 main 分支（否则 Agent 虽可升级但 OTA 功能不完整）
 - [ ] Master 配置中 `ENABLE_MASTER_OTA="true"`（安装时已选择开启 OTA）
 - [ ] Agent 配置中 `ENABLE_OTA="true"`（安装时已选择开启 OTA）
-- [ ] Agent 的 REPO_RAW_URL 已在 `agent_daemon.sh` 中指向 hardened 分支（升级后会更新）
+- [ ] Agent 的 REPO_RAW_URL 已在 `agent_daemon.sh` 中指向 main 分支（升级后会更新）
 
 #### Telegram Bot 操作步骤
 
@@ -467,7 +467,7 @@ systemctl restart ip-sentinel-agent.service 2>/dev/null || {
 
 ### 6.4 恢复到上游的 REPO_RAW_URL
 
-回滚后，如果希望恢复到原版仓库（而非 hardened），需修改所有脚本中的 `REPO_RAW_URL`：
+回滚后，如果希望恢复到原版仓库（而非安全加固 fork），需修改所有脚本中的 `REPO_RAW_URL`：
 
 ```bash
 # 查看当前 REPO_RAW_URL 分布
@@ -475,20 +475,20 @@ grep -rn "REPO_RAW_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/n
 
 # 批量替换为原版地址
 ORIG_URL="https://raw.githubusercontent.com/hotyue/IP-Sentinel/main"
-HARDENED_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
+FORK_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 
 # Master 端
-sed -i "s|$HARDENED_URL|$ORIG_URL|g" /opt/ip_sentinel_master/tg_master.sh
+sed -i "s|$FORK_URL|$ORIG_URL|g" /opt/ip_sentinel_master/tg_master.sh
 
 # Agent 端
-sed -i "s|$HARDENED_URL|$ORIG_URL|g" /opt/ip_sentinel/core/agent_daemon.sh
-sed -i "s|$HARDENED_URL|$ORIG_URL|g" /opt/ip_sentinel/core/updater.sh
-sed -i "s|$HARDENED_URL|$ORIG_URL|g" /opt/ip_sentinel/core/tg_report.sh
-sed -i "s|$HARDENED_URL|$ORIG_URL|g" /opt/ip_sentinel/core/mod_quality.sh
-sed -i "s|$HARDENED_URL|$ORIG_URL|g" /opt/ip_sentinel/core/mod_trust.sh
+sed -i "s|$FORK_URL|$ORIG_URL|g" /opt/ip_sentinel/core/agent_daemon.sh
+sed -i "s|$FORK_URL|$ORIG_URL|g" /opt/ip_sentinel/core/updater.sh
+sed -i "s|$FORK_URL|$ORIG_URL|g" /opt/ip_sentinel/core/tg_report.sh
+sed -i "s|$FORK_URL|$ORIG_URL|g" /opt/ip_sentinel/core/mod_quality.sh
+sed -i "s|$FORK_URL|$ORIG_URL|g" /opt/ip_sentinel/core/mod_trust.sh
 
 # 确认已全部替换
-grep -rn "$HARDENED_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/null || echo "✅ 所有 REPO_RAW_URL 已恢复为原版"
+grep -rn "$FORK_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/null || echo "✅ 所有 REPO_RAW_URL 已恢复为原版"
 ```
 
 ---
@@ -497,7 +497,7 @@ grep -rn "$HARDENED_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/
 
 ### 7.1 HMAC_SECRET 双轨兼容机制说明
 
-Hardened 分支引入了独立于 `CHAT_ID` 的 `HMAC_SECRET` 密钥体系。为确保 **平滑升级不中断**，采用了双轨兼容设计：
+安全加固分支引入了独立于 `CHAT_ID` 的 `HMAC_SECRET` 密钥体系。为确保 **平滑升级不中断**，采用了双轨兼容设计：
 
 - **新安装/升级的节点**：`config.conf` / `master.conf` 中包含 `HMAC_SECRET`，Agent 和 Master 均优先使用 `HMAC_SECRET` 进行 HMAC-SHA256 签名。
 - **老版本节点（未升级）**：`config.conf` 中没有 `HMAC_SECRET` 字段，Agent 自动回退使用 `CHAT_ID` 作为 HMAC 密钥。
@@ -510,10 +510,10 @@ Hardened 分支引入了独立于 `CHAT_ID` 的 `HMAC_SECRET` 密钥体系。为
 
 ### 7.2 REPO_RAW_URL 指向 fork 仓库的单点依赖风险
 
-Hardened 分支的所有安装脚本、更新脚本、OTA 拉取均指向：
+安全加固分支的所有安装脚本、更新脚本、OTA 拉取均指向：
 
 ```
-https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened
+https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main
 ```
 
 如果该仓库或分支被删除、锁定、或 GitHub Raw CDN 不可达，**将导致以下影响**：
@@ -528,19 +528,19 @@ https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened
 
 **缓解措施**：
 
-1. 定期同步 hardened 分支到自有仓库（见 8.1 节）。
+1. 定期同步安全加固分支到自有仓库（见 8.1 节）。
 2. 自建 GitHub Raw Mirror（见 8.2 节）。
 3. 保留一份完整备份，在极端情况下手动恢复。
 
 ### 7.3 上游更新同步策略
 
-Hardened 分支基于上游的 v4.3.x 版本。上游 `hotyue/IP-Sentinel` 会持续迭代新功能，同步策略如下：
+安全加固分支基于上游的 v4.3.x 版本。上游 `hotyue/IP-Sentinel` 会持续迭代新功能，同步策略如下：
 
 ```bash
-# 将上游 main 分支合并到 hardened
+# 将上游 main 分支合并到本地 main
 git remote add upstream https://github.com/hotyue/IP-Sentinel.git
 git fetch upstream main
-git checkout hardened
+git checkout main
 git merge upstream/main --no-edit
 ```
 
@@ -577,7 +577,7 @@ apk add python3
 
 | 阶段 | 操作 | 说明 | 回滚时间 |
 |---|---|---|---|
-| **验证** | 在 1 台新 VPS 上全新安装 hardened 分支 | 确认安装、注册、养护循环正常运行 | 随时 |
+| **验证** | 在 1 台新 VPS 上全新安装安全加固分支 | 确认安装、注册、养护循环正常运行 | 随时 |
 | **灰度 Master** | 升级 1 台 Master（如有多台） | 确认 Bot 响应、OTA 指令、节点列表正常 | 5 分钟 |
 | **灰度 Agent** | 选择 2-3 台低价值 Agent 升级 | 确认升级后养护、上报、注册正常 | 10 分钟 |
 | **全量 Agent** | 逐批升级剩余 Agent（建议每批 20 台） | 使用 OTA 或 SSH 批量执行 | 30 分钟 |
@@ -587,13 +587,13 @@ apk add python3
 
 ## 8. 升级后的后续维护
 
-### 8.1 定期同步上游 main 分支到 hardened
+### 8.1 定期同步上游 main 分支到安全加固分支
 
 建议每隔 2-4 周同步一次上游更新：
 
 ```bash
-# 克隆 hardened 分支到本地（如尚未克隆）
-git clone -b hardened https://github.com/aduhappy/ip-sentinel-fork.git
+# 克隆仓库（默认分支 main，如尚未克隆）
+git clone https://github.com/aduhappy/ip-sentinel-fork.git
 cd ip-sentinel-fork
 
 # 添加上游仓库
@@ -601,7 +601,7 @@ git remote add upstream https://github.com/hotyue/IP-Sentinel.git
 
 # 同步上游
 git fetch upstream main
-git checkout hardened
+git checkout main
 git merge upstream/main --no-edit
 
 # 处理冲突（重点检查以下文件）
@@ -617,25 +617,25 @@ grep -n "ipaddress" master/tg_master.sh       # SSRF 防护应存在
 grep -n "subprocess" core/agent_daemon.sh     # os.system 应已替换
 grep -n "HMAC_SECRET" core/agent_daemon.sh    # 独立密钥应存在
 
-# 推送回 hardened 分支
-git push origin hardened
+# 推送回 main 分支
+git push origin main
 ```
 
 ### 8.2 自建 Mirror 的建议
 
-为避免单点依赖风险，建议自建 hardened 分支的镜像仓库：
+为避免单点依赖风险，建议自建安全加固分支的镜像仓库：
 
 1. **GitHub Fork**：Fork `aduhappy/ip-sentinel-fork` 到自有组织或个人账号，将 `REPO_RAW_URL` 指向自有 fork。
 2. **Gitee/自建 Git 服务**：定期从 GitHub 同步，并修改 `REPO_RAW_URL` 指向国内镜像源。
 3. **私有 Raw CDN**：使用 Cloudflare Workers、GitHub Proxy 等代理服务，减少直接依赖 GitHub Raw CDN。
 
-### 8.3 持续监控 hardened 分支的更新
+### 8.3 持续监控安全加固分支的更新
 
 - Watch 仓库：在 GitHub 上 Watch `aduhappy/ip-sentinel-fork` 仓库的 Release 和 Commit 通知。
 - 定期检查新提交：
   ```bash
-  # 查看 hardened 分支最新的 5 个 commit
-  curl -sfL "https://api.github.com/repos/aduhappy/ip-sentinel-fork/commits/hardened" | \
+  # 查看 main 分支最新的 5 个 commit
+  curl -sfL "https://api.github.com/repos/aduhappy/ip-sentinel-fork/commits/main" | \
     python3 -c "import sys,json; [print(c['sha'][:8], c['commit']['message'].split('\n')[0]) for c in json.load(sys.stdin)[:5]]"
   ```
 - 加入官方 Telegram 频道 `@IP_Sentinel_Matrix` 获取上游更新通知。
@@ -644,6 +644,6 @@ git push origin hardened
 
 ---
 
-> **文档版本**: v1.0 | **最后更新**: 2026-07-29 | **适用分支**: hardened (aduhappy/ip-sentinel-fork)
+> **文档版本**: v1.1 | **最后更新**: 2026-07-29 | **适用分支**: main (aduhappy/ip-sentinel-fork)
 >
 > 如有问题，请提交 Issue 至 [aduhappy/ip-sentinel-fork](https://github.com/aduhappy/ip-sentinel-fork) 仓库。
