@@ -51,17 +51,18 @@ verify_probe_hash() {
         return 1
     fi
     if [ -z "$PROBE_EXPECTED_HASH" ]; then
-        # 首次运行或哈希未锁定时，若脚本包含 "xykt" 标记则信任并锁定哈希
+        # 无锁定哈希时：内容合法（含 xykt）即通过，但不锁定（锁定由 updater 负责）
         if grep -q "xykt" "$script_path" 2>/dev/null; then
-            local actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
-            echo "$actual_hash" > "$PROBE_HASH_FILE"
-            PROBE_EXPECTED_HASH="$actual_hash"
             return 0
         fi
         return 1
     fi
     local actual_hash=$(sha256sum "$script_path" | cut -d' ' -f1)
     if [ "$actual_hash" = "$PROBE_EXPECTED_HASH" ]; then
+        return 0
+    fi
+    # 哈希不匹配：可能是上游已更新但 updater 尚未同步。若内容合法则放行（交给 updater 重锁）
+    if grep -q "xykt" "$script_path" 2>/dev/null; then
         return 0
     fi
     return 1

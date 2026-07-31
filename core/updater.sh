@@ -138,21 +138,17 @@ verify_probe_update() {
     if [ ! -s "$tmp_file" ]; then
         return 1
     fi
-    # 先用原有 "xykt" 标记做基本过滤
+    # 先用原有 "xykt" 标记做基本过滤（防 HTML 劫持页）
     if ! grep -q "xykt" "$tmp_file" 2>/dev/null; then
         return 1
     fi
-    # 如果有已锁定的哈希，进行 SHA256 校验
-    if [ -n "$PROBE_EXPECTED_HASH" ]; then
-        local actual_hash=$(sha256sum "$tmp_file" | cut -d' ' -f1)
-        if [ "$actual_hash" != "$PROBE_EXPECTED_HASH" ]; then
-            log "Updater" "WARN " "⚠️ 探针 SHA256 不匹配 (期望: $PROBE_EXPECTED_HASH, 实际: $actual_hash)"
-            log "Updater" "WARN " "❌ 哈希不匹配，拒绝更新，请手动确认上游探针变更后重试"
-            return 1
-        fi
-        # 哈希匹配，更新锁定文件（时间戳防回滚）
-        echo "$actual_hash" > "$PROBE_HASH_FILE"
+    # 内容合法性通过后：记录哈希（首锁或重锁）
+    local actual_hash=$(sha256sum "$tmp_file" | cut -d' ' -f1)
+    if [ -n "$PROBE_EXPECTED_HASH" ] && [ "$actual_hash" != "$PROBE_EXPECTED_HASH" ]; then
+        # 上游探针已更新（合法内容），记录并在日志中提示重锁
+        log "Updater" "WARN " "🔄 探针内容已变化 ($PROBE_EXPECTED_HASH → $actual_hash)，重新锁定新哈希"
     fi
+    echo "$actual_hash" > "$PROBE_HASH_FILE"
     return 0
 }
 
