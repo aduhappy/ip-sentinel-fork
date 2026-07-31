@@ -12,14 +12,19 @@ source "$CONF"
 # 双轨密钥体系：优先使用 HMAC_SECRET，回退至 CHAT_ID 确保向后兼容
 HMAC_SECRET=${HMAC_SECRET:-$CHAT_ID}
 
-# [HMAC 密钥同步] Master 是唯一密钥权威：若未配置或仍回退为 CHAT_ID，则启动时生成真实密钥并持久化
+# [HMAC 密钥同步] Master 是唯一密钥权威
+# [安全修复] 仅当 master.conf 完全缺失 HMAC_SECRET（或仍处于旧版 CHAT_ID 回退态）时才生成新密钥并持久化；
+# 已有随机密钥一律保留不覆盖，防止升级场景下 Master 生成新密钥导致与存量 Agent 密钥失配而永久失联。
+# 若确认处于回退态并重新生成，则置位 KEY_REGEN，供启动时对存量节点批量重发 /setkey 收敛密钥。
+KEY_REGEN=0
 if [ -z "$HMAC_SECRET" ] || [ "$HMAC_SECRET" = "$CHAT_ID" ]; then
     HMAC_SECRET=$(openssl rand -hex 32)
     if [ -f "$CONF" ]; then
         sed -i "/^HMAC_SECRET=/d" "$CONF"
         echo "HMAC_SECRET=\"$HMAC_SECRET\"" >> "$CONF"
-        echo "ℹ️ [Master] 已生成并持久化新 HMAC_SECRET（Agent 需在 TG 重发注册指令领取密钥）" >&2
+        echo "ℹ️ [Master] 已生成并持久化新 HMAC_SECRET（启动后将对存量节点批量下发 setkey）" >&2
     fi
+    KEY_REGEN=1
 fi
 
 REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
@@ -167,6 +172,32 @@ db_exec "CREATE TABLE IF NOT EXISTS ip_trend_log (
 );" 2>/dev/null
 db_exec "ALTER TABLE ip_trend_log ADD COLUMN goog_status TEXT DEFAULT 'Unknown';" 2>/dev/null
 db_exec "ALTER TABLE ip_trend_log ADD COLUMN gpt_status TEXT DEFAULT 'Unknown';" 2>/dev/null
+
+# ==========================================================
+# [HMAC 密钥同步] 启动时批量密钥收敛：回退态（HMAC_SECRET 曾等于 CHAT_ID）重新生成密钥后，
+# 对全部已注册节点用 CHAT_ID 引导签名批量重发 /setkey，将存量 Agent 收敛到新密钥。
+# 说明：CHAT_ID 引导验签仅在 Agent 密钥尚未轮换（AUTH_TOKEN == CHAT_ID）时有效，
+# 因此用 CHAT_ID 签名的 setkey 只对新/未轮换 Agent 生效，已持有新密钥的 Agent 不受影响。
+# ==========================================================
+if [ "$KEY_REGEN" = "1" ]; then
+    ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes;" 2>/dev/null)
+    if [ -n "$ALL_NODES" ]; then
+        echo "ℹ️ [Master] 检测到密钥回退态已重新生成，开始对存量节点批量下发 HMAC_SECRET..." >&2
+        echo "$ALL_NODES" | while IFS='|' read -r NNAME AIP APORT AFP; do
+            if [ -n "$AIP" ] && [ -n "$APORT" ]; then
+                # 证书指纹未知时此通道固定使用 --insecure（与注册时刻握手一致）
+                SETKEY_RESP=$(call_agent "$AIP" "$APORT" "/setkey" "&key=${HMAC_SECRET}" "$AFP" "$CHAT_ID")
+                if [[ "$SETKEY_RESP" == *"Action Accepted: setkey"* ]]; then
+                    echo "ℹ️ [Master] 节点 ${NNAME} 密钥同步成功" >&2
+                else
+                    echo "⚠️ [Master] 节点 ${NNAME} 密钥同步失败/超时（Agent 可能旧版不支持 /setkey，将保持 CHAT_ID 回退兼容）" >&2
+                fi
+            fi
+        done
+    else
+        echo "ℹ️ [Master] 未发现已注册节点，跳过批量密钥收敛" >&2
+    fi
+fi
 
 # ==========================================================
 # 3. 核心长轮询调度器
@@ -323,7 +354,10 @@ except ValueError:
                 CERT_FP=""
                 if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
                     AGENT_SINGLE_IP=$(echo "$AGENT_IP" | tr '_' ',' | cut -d',' -f1 | tr -d '[]')
-                    FP_URL="https://${AGENT_SINGLE_IP}:${AGENT_PORT}/cert_fp"
+                    # [修复] /cert_fp 位于 Agent 验签门内，裸 curl 会被 401 拒收。
+                    # 注册时刻双方共享秘密是 CHAT_ID（新 Agent 以 CHAT_ID 验签 / 老 Agent 走 CHAT_ID 引导），
+                    # 因此用 CHAT_ID 签名构造 URL 拉取指纹，成功后 P1-002 证书固定才能真实生效。
+                    FP_URL=$(generate_signed_url "$AGENT_SINGLE_IP" "$AGENT_PORT" "/cert_fp" "$CHAT_ID")
                     # 首次获取指纹时 Agent 只有自签名证书，所以需要用 --insecure
                     CERT_FP=$(curl --insecure -s --connect-timeout 4 -m 8 "$FP_URL" 2>/dev/null || echo "")
                     # [P1-002] 校验公钥 DER SHA256 的 base64（44 字符，末位 =）；旧版 hex 指纹不再接受

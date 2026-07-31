@@ -198,8 +198,11 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 sign_ok = hmac.compare_digest(expected_sign, req_sign)
                 
                 # [HMAC 密钥同步] 引导式验签（仅 /setkey）：已持有旧随机密钥的 Agent，在密钥轮换时刻
-                # 额外接受以 CHAT_ID 签名的 setkey 指令（注册时双方唯一已知共享秘密），确保密钥可平滑下发
-                if not sign_ok and req_path == '/setkey':
+                # 额外接受以 CHAT_ID 签名的 setkey 指令（注册时双方唯一已知共享秘密），确保密钥可平滑下发。
+                # [安全] 引导仅当 AUTH_TOKEN 仍等于 CHAT_ID（密钥尚未轮换的初始状态）时有效；
+                # 一旦 setkey 成功轮换，AUTH_TOKEN != CHAT_ID 后引导立即关闭，
+                # 堵死"CHAT_ID 泄露 → 离线伪造 /setkey 轮换密钥"的节点失联攻击。
+                if not sign_ok and req_path == '/setkey' and AUTH_TOKEN == CHAT_ID:
                     try:
                         bootstrap_expected = hmac.new(str(CHAT_ID).encode('utf-8'), msg, hashlib.sha256).hexdigest()
                         sign_ok = hmac.compare_digest(bootstrap_expected, req_sign)
