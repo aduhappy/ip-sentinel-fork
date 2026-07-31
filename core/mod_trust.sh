@@ -8,7 +8,7 @@
 INSTALL_DIR="/opt/ip_sentinel"
 CONFIG_FILE="${INSTALL_DIR}/config.conf"
 UA_FILE="${INSTALL_DIR}/data/user_agents.txt"
-REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
+REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 
 # --- [基础环境校验] ---
 [ ! -f "$CONFIG_FILE" ] && exit 1

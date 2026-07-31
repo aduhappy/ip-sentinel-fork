@@ -22,7 +22,7 @@ if [ -z "$HMAC_SECRET" ] || [ "$HMAC_SECRET" = "$CHAT_ID" ]; then
     fi
 fi
 
-REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
+REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 MASTER_VERSION=${MASTER_VERSION:-"3.5.0"}
 
 OFFSET_FILE="${MASTER_DIR}/.tg_offset"

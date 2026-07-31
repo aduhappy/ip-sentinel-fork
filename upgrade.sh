@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # IP-Sentinel 一键备份升级脚本 — hardened 分支
-# 用法: bash <(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/upgrade.sh)
+# 用法: bash <(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/upgrade.sh)
 # 支持同一台机器上 Master + Agent 并存（主子同体）
 # ==========================================================
 set -euo pipefail
@@ -20,7 +20,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 step()  { echo -e "\n${CYAN}========== $1 ==========${NC}"; }
 
-REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
+REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 
 # 全局变量
 HAS_MASTER=false
