@@ -244,8 +244,28 @@ do_master_deploy_core() {
     fi
     pkill -9 -f "tg_master.sh" >/dev/null 2>&1 || true
 
+    # 覆盖前备份旧版引擎，供启动失败时自动回退 (对齐 Agent 侧 core.bak 机制)
+    if [ -f "${MASTER_DIR}/tg_master.sh" ]; then
+        cp -a "${MASTER_DIR}/tg_master.sh" "${MASTER_DIR}/tg_master.sh.bak"
+        echo "⏳ 旧版引擎已备份为 tg_master.sh.bak..."
+    fi
+
     mv "$TMP_MASTER" "${MASTER_DIR}/tg_master.sh"
     chmod +x "${MASTER_DIR}/tg_master.sh"
+
+    # 新引擎部署后先做语法校验，失败则自动回退到旧版引擎
+    if ! bash -n "${MASTER_DIR}/tg_master.sh" 2>/dev/null; then
+        if [ -f "${MASTER_DIR}/tg_master.sh.bak" ]; then
+            echo -e "\033[31m❌ 新引擎语法校验失败，自动回退到旧版引擎...\033[0m"
+            cp -a "${MASTER_DIR}/tg_master.sh.bak" "${MASTER_DIR}/tg_master.sh"
+            chmod +x "${MASTER_DIR}/tg_master.sh"
+            echo -e "\033[32m✅ 已回退至旧版引擎，继续启动流程...\033[0m"
+        else
+            echo -e "\033[31m❌ 致命错误：新引擎语法校验失败且无备份可回退，已中止部署！\033[0m"
+            rm -f "$TMP_MASTER"
+            exit 1
+        fi
+    fi
 
     if is_systemd; then
         echo "💡 检测到 Systemd 环境，正在部署原生守护服务..."
@@ -283,6 +303,38 @@ EOF
         [ -f "${SECURE_TMP}/cron_master" ] && crontab "${SECURE_TMP}/cron_master" 2>/dev/null
         
         pgrep -f tg_master.sh >/dev/null || { nohup bash "${MASTER_DIR}/tg_master.sh" >/dev/null 2>&1 & disown 2>/dev/null; }
+    fi
+
+    # ==========================================================
+    # [启动验证] 对齐 Agent 侧 core.bak 回退机制：等待 3 秒存活自检，
+    # 新引擎进程未存活则从 tg_master.sh.bak 恢复并重启
+    # ==========================================================
+    echo "⏳ 正在验证新引擎启动状态..."
+    sleep 3
+    if [ -f "${MASTER_DIR}/tg_master.sh.bak" ]; then
+        if ! pgrep -f "tg_master.sh" > /dev/null 2>&1; then
+            echo -e "\033[31m❌ 新引擎启动失败，自动回退到旧版引擎...\033[0m"
+            mv -f "${MASTER_DIR}/tg_master.sh.bak" "${MASTER_DIR}/tg_master.sh"
+            chmod +x "${MASTER_DIR}/tg_master.sh"
+
+            # 重启旧版引擎
+            if is_systemd; then
+                systemctl restart ip-sentinel-master.service >/dev/null 2>&1 || true
+            else
+                nohup bash "${MASTER_DIR}/tg_master.sh" >/dev/null 2>&1 & disown 2>/dev/null
+            fi
+
+            sleep 2
+            if pgrep -f "tg_master.sh" > /dev/null 2>&1; then
+                echo -e "\033[32m✅ 旧版引擎回退成功，系统已恢复。\033[0m"
+            else
+                echo -e "\033[31m❌ 旧版引擎回退也失败，请手动 SSH 介入修复！\033[0m"
+            fi
+        else
+            # 新引擎启动成功，清理备份文件
+            rm -f "${MASTER_DIR}/tg_master.sh.bak" 2>/dev/null
+            echo -e "\033[32m✅ 引擎启动验证通过，清理备份文件。\033[0m"
+        fi
     fi
 }
 
