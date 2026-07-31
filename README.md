@@ -155,4 +155,4 @@ bash <(curl -sL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main
 
 
 ### 📈 Stargazers over time
-![Star History](https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened/data/star_history.svg?v=1)
+![Star History](https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/data/star_history.svg?v=1)
