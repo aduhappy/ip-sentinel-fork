@@ -165,8 +165,8 @@ do_write_config() {
         LANG_PARAMS=$(jq -r '.google_module.lang_params' "$REGION_JSON_FILE")
 	VALID_URL_SUFFIX=$(jq -r '.google_module.valid_url_suffix' "$REGION_JSON_FILE")
 
-	# [P0-003] 安装时生成随机 HMAC 签名密钥
-	HMAC_SECRET="$(openssl rand -hex 32)"
+	# [HMAC 密钥同步] Agent 不再独立生成 HMAC 签名密钥，留空等待 Master 注册时通过 /setkey 下发（无密钥时回退 CHAT_ID 验签兼容）
+	HMAC_SECRET="${HMAC_SECRET:-}"
 
 	cat > "$CONFIG_FILE" << EOF
 # IP-Sentinel 本地固化配置 (生成时间: $(date '+%Y-%m-%d %H:%M:%S'))

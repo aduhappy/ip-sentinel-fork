@@ -12,6 +12,16 @@ source "$CONF"
 # 双轨密钥体系：优先使用 HMAC_SECRET，回退至 CHAT_ID 确保向后兼容
 HMAC_SECRET=${HMAC_SECRET:-$CHAT_ID}
 
+# [HMAC 密钥同步] Master 是唯一密钥权威：若未配置或仍回退为 CHAT_ID，则启动时生成真实密钥并持久化
+if [ -z "$HMAC_SECRET" ] || [ "$HMAC_SECRET" = "$CHAT_ID" ]; then
+    HMAC_SECRET=$(openssl rand -hex 32)
+    if [ -f "$CONF" ]; then
+        sed -i "/^HMAC_SECRET=/d" "$CONF"
+        echo "HMAC_SECRET=\"$HMAC_SECRET\"" >> "$CONF"
+        echo "ℹ️ [Master] 已生成并持久化新 HMAC_SECRET（Agent 需在 TG 重发注册指令领取密钥）" >&2
+    fi
+fi
+
 REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/hardened"
 MASTER_VERSION=${MASTER_VERSION:-"3.5.0"}
 
@@ -72,16 +82,18 @@ db_exec() {
 }
 
 # [HMAC 动态签名引擎] 下发指令挂载带有时效性的哈希签名，防止重放与中间人篡改
+# 参数：ip port path [sign_key] — sign_key 可选，用于注册阶段以 CHAT_ID 引导签名，默认使用 HMAC_SECRET
 generate_signed_url() {
     local target_ip=$1
     local target_port=$2
     local action_path=$3
+    local override_key=$4
     local current_t=$(date +%s)
     
     local payload="${action_path}:${current_t}"
     # [v4.1.7 致命修复] 弃用 -hmac，改用 -macopt 标准语法，彻底杜绝 TG 群组负数 ID 导致的 OpenSSL 参数注入崩溃
     # [P0-003] 独立密钥体系：优先使用 HMAC_SECRET 作为 HMAC 签名密钥，回退至 CHAT_ID 确保向后兼容
-    local HMAC_KEY="${HMAC_SECRET:-$CHAT_ID}"
+    local HMAC_KEY="${override_key:-${HMAC_SECRET:-$CHAT_ID}}"
     local signature=$(echo -n "$payload" | openssl dgst -sha256 -mac HMAC -macopt key:"$HMAC_KEY" | awk '{print $NF}')
     
     echo "https://${target_ip}:${target_port}${action_path}?t=${current_t}&sign=${signature}"
@@ -96,6 +108,7 @@ call_agent() {
     local path="$3"
     local suffix="$4"
     local cert_fingerprint="$5"   # [P1-002] 证书 SHA256 指纹，用于 TLS 固定钉扎验证
+    local sign_key="$6"           # [HMAC 密钥同步] 可选签名密钥覆盖（注册阶段用 CHAT_ID 引导签名）
     local res="FAILED"
     
     # 将长串中的下划线统一洗回逗号，确保万无一失的弹匣拆解
@@ -103,7 +116,7 @@ call_agent() {
     IFS=',' read -r -a ip_array <<< "$clean_ips"
     for ip in "${ip_array[@]}"; do
         if [ -n "$ip" ]; then
-            local url=$(generate_signed_url "$ip" "$port" "$path")
+            local url=$(generate_signed_url "$ip" "$port" "$path" "$sign_key")
             [ -n "$suffix" ] && url="${url}${suffix}"
             
             # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
@@ -318,6 +331,20 @@ except ValueError:
                         db_exec "UPDATE nodes SET cert_fp='$CERT_FP' WHERE chat_id='$CHAT_ID' AND node_name='$NODE_NAME';"
                     fi
                 fi
+
+                # [HMAC 密钥同步] 向 Agent 下发 Master 的 HMAC_SECRET，确保双方密钥一致
+                # 设计：注册时刻的共享秘密是 CHAT_ID（老 Agent 无 HMAC_SECRET 时回退 CHAT_ID 验签；
+                #       已持有旧随机密钥的 Agent 对 /setkey 额外开放 CHAT_ID 引导验签），因此用 CHAT_ID 签名下发。
+                # Agent 的 /setkey 路由收到后即持久化为新密钥，后续指令由 Master 用新 HMAC_SECRET 签名。
+                if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ] && [ -n "$HMAC_SECRET" ]; then
+                    # 新 Agent 证书指纹尚未入库，此通道固定使用 --insecure（与注册时刻握手一致）
+                    SETKEY_RESP=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/setkey" "&key=${HMAC_SECRET}" "" "$CHAT_ID")
+                    if [[ "$SETKEY_RESP" == *"Action Accepted: setkey"* ]]; then
+                        echo "ℹ️ [Master] 节点 ${NODE_NAME} 注册完成，已下发 HMAC_SECRET 密钥同步指令" >&2
+                    else
+                        echo "⚠️ [Master] 节点 ${NODE_NAME} 密钥下发失败/超时（Agent 可能旧版不支持 /setkey，将保持 CHAT_ID 回退兼容）" >&2
+                    fi
+                fi
                 
                 # 统一将下划线替换为逗号，再进行格式化输出，兼容您的所有测试版本
                 FMT_AGENT_IP=$(echo "$AGENT_IP" | tr '_' ',')
@@ -391,6 +418,10 @@ except ValueError:
                     if [ -s "$OTA_TMP_INSTALL" ]; then
                         OTA_VERIFY_HASH=$(sha256sum "$OTA_TMP_INSTALL" | cut -d' ' -f1)
                         rm -f "$OTA_TMP_INSTALL"
+                    fi
+                    # [P1-008] 校验 OTA 哈希格式（防御纵深）
+                    if [ -n "$OTA_VERIFY_HASH" ] && ! [[ "$OTA_VERIFY_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+                        OTA_VERIFY_HASH=""
                     fi
 
 	                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND enable_ota='true';")
@@ -815,6 +846,10 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 		                    if [ -s "$OTA_TMP_INSTALL" ]; then
 		                        OTA_VERIFY_HASH=$(sha256sum "$OTA_TMP_INSTALL" | cut -d' ' -f1)
 		                        rm -f "$OTA_TMP_INSTALL"
+		                    fi
+		                    # [P1-008] 校验 OTA 哈希格式（防御纵深）
+		                    if [ -n "$OTA_VERIFY_HASH" ] && ! [[ "$OTA_VERIFY_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+		                        OTA_VERIFY_HASH=""
 		                    fi
 		                    
 		                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")

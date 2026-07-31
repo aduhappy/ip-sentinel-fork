@@ -95,6 +95,7 @@ import subprocess
 import sys
 import os
 import html
+import re
 import urllib.parse
 import urllib.request
 import hmac
@@ -125,6 +126,7 @@ def clean_used_signs():
 
 # [权限鉴权] 提取 HMAC_SECRET 作为 PSK 预共享密钥（双轨兼容：无 HMAC_SECRET 时回退至 CHAT_ID）
 AUTH_TOKEN = ""
+CHAT_ID = ""
 if os.path.exists('/opt/ip_sentinel/config.conf'):
     with open('/opt/ip_sentinel/config.conf', 'r') as f:
         for line in f:
@@ -140,9 +142,18 @@ if os.path.exists('/opt/ip_sentinel/config.conf'):
                 if line.startswith('CHAT_ID='):
                     AUTH_TOKEN = line.split('=', 1)[1].strip('"\'')
                     break
+    # [HMAC 密钥同步] 加载 CHAT_ID 供 /setkey 引导验签使用（密钥轮换时刻双方共享秘密）
+    if not CHAT_ID:
+        with open('/opt/ip_sentinel/config.conf', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('CHAT_ID='):
+                    CHAT_ID = line.split('=', 1)[1].strip('"\'')
+                    break
 
 class AgentHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        global AUTH_TOKEN
         # [权限校验] 路径解析与 HMAC-SHA256 动态签名核验
         parsed = urllib.parse.urlparse(self.path)
         req_path = parsed.path
@@ -184,8 +195,18 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 # [身份核验] 数据完整性校验，使用 compare_digest 免疫时序探测攻击
                 msg = f"{req_path}:{req_t}".encode('utf-8')
                 expected_sign = hmac.new(AUTH_TOKEN.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+                sign_ok = hmac.compare_digest(expected_sign, req_sign)
                 
-                if not hmac.compare_digest(expected_sign, req_sign):
+                # [HMAC 密钥同步] 引导式验签（仅 /setkey）：已持有旧随机密钥的 Agent，在密钥轮换时刻
+                # 额外接受以 CHAT_ID 签名的 setkey 指令（注册时双方唯一已知共享秘密），确保密钥可平滑下发
+                if not sign_ok and req_path == '/setkey':
+                    try:
+                        bootstrap_expected = hmac.new(str(CHAT_ID).encode('utf-8'), msg, hashlib.sha256).hexdigest()
+                        sign_ok = hmac.compare_digest(bootstrap_expected, req_sign)
+                    except Exception:
+                        pass
+                
+                if not sign_ok:
                     self.send_response(401)
                     self.end_headers()
                     self.wfile.write(b"401 Unauthorized: Signature Mismatch\n")
@@ -392,18 +413,18 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 cert_path = '/opt/ip_sentinel/core/cert.pem'
                 if os.path.exists(cert_path):
                     # [P1-002] 返回公钥(DER)的 SHA256 base64，供 curl --pinnedpubkey "sha256//<b64>" 使用
+                    # 全链路 bytes 管线：PEM(ascii) -> DER(binary) -> hash(binary) -> base64(ascii)
                     result = subprocess.run(
                         ['openssl', 'x509', '-pubkey', '-in', cert_path, '-noout'],
-                        capture_output=True, text=True)
+                        capture_output=True)
                     if result.returncode != 0:
                         self.send_response(500)
                         self.end_headers()
                         self.wfile.write(b"500 Cannot read certificate\n")
                         return
-                    pubkey_pem = result.stdout
                     result2 = subprocess.run(
                         ['openssl', 'pkey', '-pubin', '-outform', 'DER'],
-                        input=pubkey_pem, capture_output=True)
+                        input=result.stdout, capture_output=True)
                     if result2.returncode != 0:
                         self.send_response(500)
                         self.end_headers()
@@ -414,8 +435,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                         input=result2.stdout, capture_output=True)
                     result4 = subprocess.run(
                         ['openssl', 'enc', '-base64', '-A'],
-                        input=result3.stdout, capture_output=True, text=True)
-                    fingerprint = result4.stdout.strip()
+                        input=result3.stdout, capture_output=True)
+                    fingerprint = result4.stdout.decode('utf-8', errors='ignore').strip()
                     self.send_response(200)
                     self.send_header("Content-type", "text/plain")
                     self.end_headers()
@@ -424,6 +445,46 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     self.send_response(404)
                     self.end_headers()
                     self.wfile.write(b"404 No certificate found\n")
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"500 Error: {str(e)}\n".encode('utf-8'))
+            return
+
+        # 路由 7.5: HMAC 密钥更新 (Key Rotation，仅 Master 下发，验签已在入口完成)
+        elif req_path == '/setkey':
+            import re
+            new_key = query.get('key', [''])[0]
+            # [安全] 严格 64 位 hex 白名单校验，封死注入与弱密钥
+            if not re.fullmatch(r'[0-9a-fA-F]{64}', new_key):
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"400 Bad Request: Invalid key format\n")
+                return
+            try:
+                config_path = '/opt/ip_sentinel/config.conf'
+                import fcntl
+                with open(config_path, 'r+', encoding='utf-8', errors='ignore') as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    lines = f.readlines()
+                    found = False
+                    for i, line in enumerate(lines):
+                        if line.startswith('HMAC_SECRET='):
+                            lines[i] = f'HMAC_SECRET="{new_key}"\n'
+                            found = True
+                            break
+                    if not found:
+                        lines.append(f'HMAC_SECRET="{new_key}"\n')
+                    f.seek(0)
+                    f.writelines(lines)
+                    f.truncate()
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                # [即时生效] 同步内存鉴权令牌，无需重启 daemon 即完成密钥轮换
+                AUTH_TOKEN = new_key
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Action Accepted: setkey\n")
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()
@@ -482,6 +543,14 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 # [P1-008] OTA 完整性校验：从查询参数中提取期望的 SHA256 哈希
                 ota_params = urllib.parse.parse_qs(parsed.query)
                 ota_expected_sha256 = ota_params.get('sha256', [''])[0]
+                # [安全] 白名单校验：仅接受 64 位 hex，防止注入 ota_script
+                # 注意：使用独立别名 _re 而非顶层 re，规避 do_GET 内其他路由局部 import re 引起的 UnboundLocalError
+                import re as _re
+                if ota_expected_sha256 and not _re.fullmatch(r'[0-9a-fA-F]{64}', ota_expected_sha256):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"400 Bad Request: Invalid sha256 format\n")
+                    return
                 
                 config_mem = {}
                 config_path = '/opt/ip_sentinel/config.conf'
@@ -535,7 +604,7 @@ export SILENT_OTA="true"
 TMP_FILE="/tmp/ota_agent.sh"
 if ! curl -fsSL --connect-timeout 10 --retry 2 {repo_url}/core/install.sh -o "$TMP_FILE" 2>/dev/null; then
     MSG=$(echo '{err_msg_b64}' | base64 -d)
-    curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
+    curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" --data-urlencode "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
     echo "OTA Download Failed: Could not fetch install.sh" >> /opt/ip_sentinel/logs/ota_upgrade.log
     exit 1
 fi
@@ -546,7 +615,7 @@ if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
     if [ "$DOWNLOADED_HASH" != "{ota_expected_sha256}" ]; then
         VERIFY_PASS=false
         MSG=$(echo '{err_msg_b64}' | base64 -d)
-        curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
+        curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" --data-urlencode "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
         echo "OTA Integrity Failed: SHA256 mismatch (expected: {ota_expected_sha256}, got: $DOWNLOADED_HASH)" > /opt/ip_sentinel/logs/ota_upgrade.log
     fi
 fi
@@ -555,7 +624,7 @@ fi
 else
     if [ "$VERIFY_PASS" = true ]; then
         MSG=$(echo '{err_msg_b64}' | base64 -d)
-        curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
+        curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" --data-urlencode "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
         echo "OTA Checksum Failed: Script corrupted" > /opt/ip_sentinel/logs/ota_upgrade.log
     fi
 fi
