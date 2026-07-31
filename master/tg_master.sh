@@ -108,7 +108,8 @@ call_agent() {
             
             # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
             if [ -n "$cert_fingerprint" ]; then
-                res=$(curl -s --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
+                # [P1-002] -k 用于信任自签名证书本身，pin 确保公钥匹配（实测 -k 下 pin 仍强制执行）
+                res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
             else
                 echo "[⚠️ P1-002] 节点 $ip 无证书指纹，使用 --insecure 回退模式（建议升级 Agent）" >&2
                 res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
@@ -131,6 +132,9 @@ db_exec "PRAGMA synchronous=NORMAL;" > /dev/null 2>&1
 
 # [P1-002] 确保 cert_fp 列存在（兼容旧数据库）
 db_exec "ALTER TABLE nodes ADD COLUMN cert_fp TEXT DEFAULT '';" 2>/dev/null || true
+
+# [P1-002] 清理旧版错误格式的 cert_fp（hex 证书指纹 64 字符 → 置空触发重新获取公钥 base64）
+db_exec "UPDATE nodes SET cert_fp='' WHERE cert_fp != '' AND length(cert_fp) != 44;" 2>/dev/null || true
 
 # 自动探测并动态扩展节点基础表结构，屏蔽已存在的报错
 db_exec "ALTER TABLE nodes ADD COLUMN region TEXT DEFAULT 'UNKNOWN';" 2>/dev/null
@@ -309,7 +313,8 @@ except ValueError:
                     FP_URL="https://${AGENT_SINGLE_IP}:${AGENT_PORT}/cert_fp"
                     # 首次获取指纹时 Agent 只有自签名证书，所以需要用 --insecure
                     CERT_FP=$(curl --insecure -s --connect-timeout 4 -m 8 "$FP_URL" 2>/dev/null || echo "")
-                    if [ -n "$CERT_FP" ] && [[ "$CERT_FP" =~ ^[A-F0-9]{64}$ ]]; then
+                    # [P1-002] 校验公钥 DER SHA256 的 base64（44 字符，末位 =）；旧版 hex 指纹不再接受
+                    if [ -n "$CERT_FP" ] && [[ "$CERT_FP" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
                         db_exec "UPDATE nodes SET cert_fp='$CERT_FP' WHERE chat_id='$CHAT_ID' AND node_name='$NODE_NAME';"
                     fi
                 fi

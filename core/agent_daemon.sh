@@ -391,22 +391,35 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             try:
                 cert_path = '/opt/ip_sentinel/core/cert.pem'
                 if os.path.exists(cert_path):
+                    # [P1-002] 返回公钥(DER)的 SHA256 base64，供 curl --pinnedpubkey "sha256//<b64>" 使用
                     result = subprocess.run(
-                        ['openssl', 'x509', '-noout', '-fingerprint', '-sha256', '-in', cert_path],
-                        capture_output=True, text=True
-                    )
-                    if result.returncode == 0:
-                        fp_line = result.stdout.strip()
-                        # Format: "SHA256 Fingerprint=AB:CD:EF:..."
-                        fingerprint = fp_line.split('=')[1].replace(':', '').upper()
-                        self.send_response(200)
-                        self.send_header("Content-type", "text/plain")
-                        self.end_headers()
-                        self.wfile.write(fingerprint.encode('utf-8'))
-                    else:
+                        ['openssl', 'x509', '-pubkey', '-in', cert_path, '-noout'],
+                        capture_output=True, text=True)
+                    if result.returncode != 0:
                         self.send_response(500)
                         self.end_headers()
                         self.wfile.write(b"500 Cannot read certificate\n")
+                        return
+                    pubkey_pem = result.stdout
+                    result2 = subprocess.run(
+                        ['openssl', 'pkey', '-pubin', '-outform', 'DER'],
+                        input=pubkey_pem, capture_output=True)
+                    if result2.returncode != 0:
+                        self.send_response(500)
+                        self.end_headers()
+                        self.wfile.write(b"500 Cannot parse public key\n")
+                        return
+                    result3 = subprocess.run(
+                        ['openssl', 'dgst', '-sha256', '-binary'],
+                        input=result2.stdout, capture_output=True)
+                    result4 = subprocess.run(
+                        ['openssl', 'enc', '-base64', '-A'],
+                        input=result3.stdout, capture_output=True, text=True)
+                    fingerprint = result4.stdout.strip()
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(fingerprint.encode('utf-8'))
                 else:
                     self.send_response(404)
                     self.end_headers()
