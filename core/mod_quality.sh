@@ -38,6 +38,8 @@ PROBE_ARGS+=("-${DYNAMIC_IP_PREF}")
 # ----------------------------------------------------------
 PROBE_SCRIPT="/opt/ip_sentinel/core/ip_probe.sh"
 PROBE_HASH_FILE="${PROBE_SCRIPT%/*}/.probe_hash"
+PROBE_PRIMARY_URL="https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh"
+PROBE_BACKUP_URL="https://IP.Check.Place"
 
 # 加载已锁定的预期哈希
 if [ -f "$PROBE_HASH_FILE" ]; then
@@ -45,13 +47,14 @@ if [ -f "$PROBE_HASH_FILE" ]; then
 fi
 
 # [完整性校验] 验证本地残留脚本的 SHA256 哈希 (防止因被墙或拦截导致本地缓存了无效的 HTML 报错页)
+# 返回值约定：0=通过；1=拒绝（将删除脚本）；2=内容合法但哈希不匹配（放行执行并触发一次重拉校验）
 verify_probe_hash() {
     local script_path="$1"
     if [ ! -f "$script_path" ]; then
         return 1
     fi
     if [ -z "$PROBE_EXPECTED_HASH" ]; then
-        # 无锁定哈希时：内容合法（含 xykt）即通过，但不锁定（锁定由 updater 负责）
+        # 无锁定哈希时：内容合法（含 xykt）即通过，但不锁定（锁定由 updater/mod_quality 重拉兜底负责）
         if grep -q "xykt" "$script_path" 2>/dev/null; then
             return 0
         fi
@@ -61,21 +64,26 @@ verify_probe_hash() {
     if [ "$actual_hash" = "$PROBE_EXPECTED_HASH" ]; then
         return 0
     fi
-    # 哈希不匹配：可能是上游已更新但 updater 尚未同步。若内容合法则放行（交给 updater 重锁）
+    # 哈希不匹配：可能是上游已更新但 updater 尚未同步。若内容合法则放行（触发重拉校验），否则拒绝
     if grep -q "xykt" "$script_path" 2>/dev/null; then
-        return 0
+        return 2
     fi
     return 1
 }
 
 # 检查本地已有脚本是否有效
-if ! verify_probe_hash "$PROBE_SCRIPT"; then
-    rm -f "$PROBE_SCRIPT" "$PROBE_HASH_FILE" 2>/dev/null
-fi
+PROBE_REVERIFY=0
+verify_probe_hash "$PROBE_SCRIPT"
+PROBE_RC=$?
+case "$PROBE_RC" in
+    0) ;;
+    2) PROBE_REVERIFY=1 ;;
+    *) rm -f "$PROBE_SCRIPT" "$PROBE_HASH_FILE" 2>/dev/null; PROBE_EXPECTED_HASH="" ;;
+esac
 
-if [ ! -s "$PROBE_SCRIPT" ] || [ ! -f "$PROBE_HASH_FILE" ]; then
+if [ ! -s "$PROBE_SCRIPT" ]; then
     # [首选防线] 从官方主干拉取
-    curl -sL -m 10 "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$PROBE_SCRIPT" 2>/dev/null
+    curl -sL -m 10 "$PROBE_PRIMARY_URL" -o "$PROBE_SCRIPT" 2>/dev/null
 
     # [哈希锁定] 验证并锁定探针哈希
     if verify_probe_hash "$PROBE_SCRIPT"; then
@@ -83,7 +91,7 @@ if [ ! -s "$PROBE_SCRIPT" ] || [ ! -f "$PROBE_HASH_FILE" ]; then
     else
         rm -f "$PROBE_SCRIPT" 2>/dev/null
         # [容灾降级] 从备用 CDN 拉取
-        curl -sL -m 15 "https://IP.Check.Place" -o "$PROBE_SCRIPT" 2>/dev/null
+        curl -sL -m 15 "$PROBE_BACKUP_URL" -o "$PROBE_SCRIPT" 2>/dev/null
 
         if verify_probe_hash "$PROBE_SCRIPT"; then
             chmod +x "$PROBE_SCRIPT" 2>/dev/null
@@ -93,6 +101,33 @@ if [ ! -s "$PROBE_SCRIPT" ] || [ ! -f "$PROBE_HASH_FILE" ]; then
             exit 1
         fi
     fi
+elif [ "$PROBE_REVERIFY" -eq 1 ]; then
+    # [重拉校验] 有锁但哈希不匹配且内容合法：放行本次执行，并主动重拉一次以重锁，
+    # 避免长时间停留在"无锁放行"状态 (永久无锁退化)
+    PROBE_TMP="/tmp/ip_sentinel_probe_reverify.sh"
+    curl -sL -m 10 "$PROBE_PRIMARY_URL" -o "$PROBE_TMP" 2>/dev/null
+    if ! verify_probe_hash "$PROBE_TMP"; then
+        curl -sL -m 15 "$PROBE_BACKUP_URL" -o "$PROBE_TMP" 2>/dev/null
+    fi
+    # 重拉内容合法（0=与锁一致 或 2=上游已更新）→ 采纳并重锁；不合法 → 保留本地旧脚本与既有锁定
+    verify_probe_hash "$PROBE_TMP"
+    RECHECK_RC=$?
+    if [ "$RECHECK_RC" -eq 0 ] || [ "$RECHECK_RC" -eq 2 ]; then
+        mv "$PROBE_TMP" "$PROBE_SCRIPT"
+        chmod +x "$PROBE_SCRIPT" 2>/dev/null
+        local_lock=$(sha256sum "$PROBE_SCRIPT" | cut -d' ' -f1)
+        echo "$local_lock" > "$PROBE_HASH_FILE"
+        PROBE_EXPECTED_HASH="$local_lock"
+    else
+        rm -f "$PROBE_TMP" 2>/dev/null
+    fi
+fi
+
+# [无锁兜底] 哈希文件缺失时自行写入锁定哈希（updater 仍是主要重锁方，此处兜底防退化）
+if [ ! -f "$PROBE_HASH_FILE" ]; then
+    local_lock=$(sha256sum "$PROBE_SCRIPT" | cut -d' ' -f1)
+    echo "$local_lock" > "$PROBE_HASH_FILE"
+    PROBE_EXPECTED_HASH="$local_lock"
 fi
 
 # ==========================================================

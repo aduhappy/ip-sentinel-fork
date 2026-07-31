@@ -121,7 +121,10 @@ fi
 # [容灾校验] SHA256 完整性校验与供应链投毒防线
 # ==========================================================
 TMP_PROBE="/tmp/ip_sentinel_probe.sh"
+TMP_PROBE_SRC2="/tmp/ip_sentinel_probe_src2.sh"
 PROBE_HASH_FILE="${INSTALL_DIR}/core/.probe_hash"
+PROBE_PRIMARY_URL="https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh"
+PROBE_BACKUP_URL="https://IP.Check.Place"
 
 # 加载已锁定的探针哈希
 PROBE_EXPECTED_HASH=""
@@ -129,44 +132,79 @@ if [ -f "$PROBE_HASH_FILE" ]; then
     PROBE_EXPECTED_HASH=$(cat "$PROBE_HASH_FILE" | tr -d '[:space:]')
 fi
 
-# 从主源拉取
-curl "${CURL_ARGS[@]}" "https://raw.githubusercontent.com/xykt/IPQuality/main/ip.sh" -o "$TMP_PROBE"
+# 从主源拉取探针脚本
+curl "${CURL_ARGS[@]}" "$PROBE_PRIMARY_URL" -o "$TMP_PROBE"
+
+# [多源交叉验证] 主源与备用源独立下载，内容哈希一致才判定为可信内容
+probe_fetch_cross_verify() {
+    local primary_file="$1"
+    if [ ! -s "$primary_file" ]; then
+        return 1
+    fi
+    # 先用原有 "xykt" 标记做基本过滤（防 HTML 劫持页）
+    if ! grep -q "xykt" "$primary_file" 2>/dev/null; then
+        return 1
+    fi
+
+    # 从备用源独立下载做二次交叉验证
+    curl "${CURL_ARGS[@]}" "$PROBE_BACKUP_URL" -o "$TMP_PROBE_SRC2"
+    if [ ! -s "$TMP_PROBE_SRC2" ]; then
+        log "Updater" "WARN " "⚠️ 备用源 ($PROBE_BACKUP_URL) 拉取失败，本次探针更新挂起，保留本地旧版本"
+        return 1
+    fi
+    if ! grep -q "xykt" "$TMP_PROBE_SRC2" 2>/dev/null; then
+        log "Updater" "WARN " "⚠️ 备用源内容不含合法 xykt 标记，双源交叉验证不通过，本次探针更新挂起"
+        return 1
+    fi
+
+    # 双源内容哈希比对：一致 → 内容可信；不一致 → 疑似投毒
+    local primary_hash=$(sha256sum "$primary_file" | cut -d' ' -f1)
+    local backup_hash=$(sha256sum "$TMP_PROBE_SRC2" | cut -d' ' -f1)
+    if [ "$primary_hash" != "$backup_hash" ]; then
+        log "Updater" "WARN " "🚨 多源哈希不一致 ($primary_hash ≠ $backup_hash)，可能遭遇投毒，请人工确认"
+        return 1
+    fi
+    return 0
+}
 
 # [P1-003] SHA256 完整性校验
 verify_probe_update() {
     local tmp_file="$1"
-    if [ ! -s "$tmp_file" ]; then
+    local actual_hash
+
+    # 基本合法性过滤 + 双源交叉验证（投毒防线）
+    if ! probe_fetch_cross_verify "$tmp_file"; then
         return 1
     fi
-    # 先用原有 "xykt" 标记做基本过滤（防 HTML 劫持页）
-    if ! grep -q "xykt" "$tmp_file" 2>/dev/null; then
-        return 1
+
+    actual_hash=$(sha256sum "$tmp_file" | cut -d' ' -f1)
+
+    if [ -z "$PROBE_EXPECTED_HASH" ]; then
+        # [首次锁定] 无已锁定哈希时，内容合法即锁定
+        echo "$actual_hash" > "$PROBE_HASH_FILE"
+        log "Updater" "INFO " "🔒 探针脚本哈希首次锁定: $actual_hash"
+        return 0
     fi
-    # 内容合法性通过后：记录哈希（首锁或重锁）
-    local actual_hash=$(sha256sum "$tmp_file" | cut -d' ' -f1)
-    if [ -n "$PROBE_EXPECTED_HASH" ] && [ "$actual_hash" != "$PROBE_EXPECTED_HASH" ]; then
-        # 上游探针已更新（合法内容），记录并在日志中提示重锁
-        log "Updater" "WARN " "🔄 探针内容已变化 ($PROBE_EXPECTED_HASH → $actual_hash)，重新锁定新哈希"
+
+    # [有锁续期] 与已锁定哈希比对：一致 → 接受并保持锁定
+    if [ "$actual_hash" = "$PROBE_EXPECTED_HASH" ]; then
+        echo "$actual_hash" > "$PROBE_HASH_FILE"
+        return 0
     fi
-    echo "$actual_hash" > "$PROBE_HASH_FILE"
-    return 0
+
+    # [变化挂起] 哈希变化且双源一致 → 可能是合法上游更新，也可能双源同时被投毒。
+    # 不自动重锁，保留旧版本，需人工确认后手动清理 .probe_hash 完成重锁
+    log "Updater" "WARN " "🛑 探针哈希变化 ($PROBE_EXPECTED_HASH → $actual_hash)，可能是上游更新或投毒，本次保留旧版本，请人工确认后手动清理 .probe_hash 重锁"
+    return 1
 }
 
 if verify_probe_update "$TMP_PROBE"; then
     mv "$TMP_PROBE" "${INSTALL_DIR}/core/ip_probe.sh"
     chmod +x "${INSTALL_DIR}/core/ip_probe.sh"
-    
-    # 首次拉取时锁定哈希
-    if [ -z "$PROBE_EXPECTED_HASH" ]; then
-        first_hash=$(sha256sum "${INSTALL_DIR}/core/ip_probe.sh" | cut -d' ' -f1)
-        echo "$first_hash" > "$PROBE_HASH_FILE"
-        log "Updater" "INFO " "🔒 探针脚本哈希已锁定: $first_hash"
-    fi
-    
     log "Updater" "INFO " "✅ 深海声呐底层探针 (ip_probe.sh) SHA256 完整性校验通过"
 else
     log "Updater" "WARN " "❌ 探针源文件拉取受损或遭投毒劫持，已触发防砖机制，保留本地旧版本"
-    rm -f "$TMP_PROBE" 2>/dev/null
+    rm -f "$TMP_PROBE" "$TMP_PROBE_SRC2" 2>/dev/null
 fi
 
 # ==========================================================
