@@ -467,13 +467,41 @@ except ValueError:
 	                        else
 	                            send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A⚠️ 警告：无法获取升级包哈希，OTA 将跳过完整性验证%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
 	                        fi
-	                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT AFP; do
-	                            local ota_suffix=""
-	                            [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
-	                            call_agent "$AIP" "$APORT" "/trigger_ota" "$ota_suffix" "$AFP" > /dev/null &
-	                            sleep 0.3
-	                        done
-                    fi
+		                        # [P1-008] 批量 OTA 结果汇总：后台子 shell 的变量累加不可见，改用临时文件收集各节点回执
+		                        OTA_RPT="/tmp/ota_report_$$.log"
+		                        : > "$OTA_RPT"
+		                        while IFS='|' read -r NNAME AIP APORT AFP; do
+		                            [ -z "$NNAME" ] && continue
+		                            local ota_suffix=""
+		                            [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
+		                            # 后台并发下发，回执写入临时文件；$$ 作文件后缀防多批次交错，>> 追加防并发写坏
+		                            ( RESP=$(call_agent "$AIP" "$APORT" "/trigger_ota" "$ota_suffix" "$AFP")
+		                              if [[ "$RESP" == *"Action Accepted"* ]]; then
+		                                  echo "OK|$NNAME" >> "$OTA_RPT"
+		                              else
+		                                  echo "FAIL|$NNAME|$RESP" >> "$OTA_RPT"
+		                              fi ) &
+		                            sleep 0.3
+		                        done <<< "$NODE_DATA"
+		                        wait
+		                        # [P1-008] 汇总播报：成功 N 台 / 失败 M 台并列出失败节点
+		                        OTA_OK_N=0; OTA_FAIL_N=0; OTA_FAIL_LIST=""
+		                        while IFS='|' read -r ST NN RESP; do
+		                            if [ "$ST" == "OK" ]; then
+		                                OTA_OK_N=$((OTA_OK_N + 1))
+		                            else
+		                                OTA_FAIL_N=$((OTA_FAIL_N + 1))
+		                                OTA_FAIL_LIST="${OTA_FAIL_LIST}\n- \`${NN}\` (${RESP})"
+		                            fi
+		                        done < "$OTA_RPT"
+		                        rm -f "$OTA_RPT"
+		                        OTA_SUMMARY="📡 **全网 OTA 结果回执汇总**：成功 \`${OTA_OK_N}\` 台，失败 \`${OTA_FAIL_N}\` 台"
+		                        if [ "$OTA_FAIL_N" -gt 0 ]; then
+		                            send_msg "$CHAT_ID" "${OTA_SUMMARY}%0A❌ 失败节点:${OTA_FAIL_LIST}"
+		                        else
+		                            send_msg "$CHAT_ID" "${OTA_SUMMARY}%0A🎉 全舰队 OTA 已全部受理成功！"
+		                        fi
+		                    fi
                     ;;
 
                 "master_ota_confirm")
@@ -903,12 +931,17 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 		                        [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
 		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ota" "$ota_suffix" "$AGENT_FP")
 	                        
-	                        if [ "$RESPONSE" == "FAILED" ]; then
-	                            TEXT_RES="❌ OTA 指令下发彻底失败！链路异常或严禁使用 HTTP 降级通讯。"
+	                        # [P1-008] OTA 回执分级：区分 200 接受 / 400 哈希拒绝 / 403 策略拒绝 / FAILED 不可达
+	                        if [[ "$RESPONSE" == *"Action Accepted"* ]]; then
+	                            TEXT_RES="✅ OTA 触发成功！节点正在后台执行拉取重构..."
+	                        elif [[ "$RESPONSE" == *"400"* ]] || [[ "$RESPONSE" == *"Invalid sha256"* ]]; then
+	                            TEXT_RES="❌ OTA 指令被拒绝：哈希格式无效或完整性校验失败"
+	                        elif [ "$RESPONSE" == "FAILED" ]; then
+	                            TEXT_RES="❌ OTA 指令下发失败（节点不可达）"
 	                        elif [[ "$RESPONSE" == *"403"* ]]; then
-	                            TEXT_RES="⚠️ **节点拒绝执行**：该节点本地未开启 OTA 权限或运行在官方网关下！"
+	                            TEXT_RES="❌ OTA 被节点本地策略拒绝"
 	                        else
-	                            TEXT_RES="✅ OTA (TLS加密) 触发成功！节点正在后台执行拉取重构..."
+	                            TEXT_RES="⚠️ OTA 回执异常，节点响应：\`${RESPONSE}\`"
 	                        fi
 	                        
 	                        if [ -n "$MSG_ID" ]; then
