@@ -115,7 +115,7 @@ call_agent() {
     local cert_fingerprint="$5"   # [P1-002] 证书 SHA256 指纹，用于 TLS 固定钉扎验证
     local sign_key="$6"           # [HMAC 密钥同步] 可选签名密钥覆盖（注册阶段用 CHAT_ID 引导签名）
     local res="FAILED"
-    
+
     # 将长串中的下划线统一洗回逗号，确保万无一失的弹匣拆解
     local clean_ips=$(echo "$ips" | tr '_' ',')
     IFS=',' read -r -a ip_array <<< "$clean_ips"
@@ -123,16 +123,29 @@ call_agent() {
         if [ -n "$ip" ]; then
             local url=$(generate_signed_url "$ip" "$port" "$path" "$sign_key")
             [ -n "$suffix" ] && url="${url}${suffix}"
-            
+
             # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
             if [ -n "$cert_fingerprint" ]; then
-                # [P1-002] -k 用于信任自签名证书本身，pin 确保公钥匹配（实测 -k 下 pin 仍强制执行）
                 res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
             else
                 echo "[⚠️ P1-002] 节点 $ip 无证书指纹，使用 --insecure 回退模式（建议升级 Agent）" >&2
                 res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
             fi
-            
+
+            # [HMAC 双轨回退] 如果签名失败（401/Signature），用 CHAT_ID 重试
+            if [ "$res" == "FAILED" ] || [[ "$res" == *"401"* ]] || [[ "$res" == *"Signature"* ]]; then
+                if [ "$sign_key" != "$CHAT_ID" ]; then
+                    echo "[ℹ️] 签名验证失败，回退 CHAT_ID 重试..." >&2
+                    local fallback_url=$(generate_signed_url "$ip" "$port" "$path" "$CHAT_ID")
+                    [ -n "$suffix" ] && fallback_url="${fallback_url}${suffix}"
+                    if [ -n "$cert_fingerprint" ]; then
+                        res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$fallback_url" || echo "FAILED")
+                    else
+                        res=$(curl --insecure -s --connect-timeout 4 -m 12 "$fallback_url" || echo "FAILED")
+                    fi
+                fi
+            fi
+
             if [ "$res" != "FAILED" ] && [ -n "$res" ]; then
                 echo "$res"
                 return
@@ -878,12 +891,7 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 
 		                        # [防线穿越] 借由 Base64 编码对下发特征进行混淆与防篡改护甲加持
 		                        ALIAS_B64=$(echo -n "$NEW_ALIAS" | base64 | tr -d '\n' | tr '+/' '-_')
-		                        # 优先用 HMAC_SECRET 签名，失败回退 CHAT_ID 签名（兼容未完成密钥同步的节点）
 		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}" "$AGENT_FP")
-		                        if [ "$RESPONSE" == "FAILED" ] || [[ "$RESPONSE" == *"401"* ]] || [[ "$RESPONSE" == *"Signature"* ]]; then
-		                            echo "[ℹ️] HMAC_SECRET 签名失败，回退 CHAT_ID 重试..." >&2
-		                            RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}" "$AGENT_FP" "$CHAT_ID")
-		                        fi
                         
                         if [ "$RESPONSE" == "FAILED" ]; then
                             send_msg "$CHAT_ID" "❌ 指令下发超时！为防范劫持风险，已终止请求。"
