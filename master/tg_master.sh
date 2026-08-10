@@ -330,6 +330,8 @@ try:
     raw = sys.stdin.read().strip()
     # 处理逗号分隔的多 IP（取第一个做 SSRF 检查）
     first_ip = raw.split(',')[0].strip().strip('[]')
+    # 处理下划线分隔的 IPv4_IPv6 格式（取 IPv4 部分）
+    first_ip = first_ip.split('_')[0]
     ip = ipaddress.ip_address(first_ip)
     if ip.is_private or ip.is_loopback or ip.is_link_local or \
        ip.is_multicast or ip.is_reserved or ip.is_unspecified:
