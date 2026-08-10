@@ -867,18 +867,23 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                 do_rename:*)
                     IFS=':' read -r CMD TARGET_NODE NEW_ALIAS <<< "$TEXT"
                     CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
-                    
-	                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
-	                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-	                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
-	                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
 
-	                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
-	                        send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 下发重命名指令，正在建立加密隧道..."
-	                        
-	                        # [防线穿越] 借由 Base64 编码对下发特征进行混淆与防篡改护甲加持
-	                        ALIAS_B64=$(echo -n "$NEW_ALIAS" | base64 | tr -d '\n' | tr '+/' '-_')
-	                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}" "$AGENT_FP")
+		                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+		                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+		                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+		                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
+
+		                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+		                        send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 下发重命名指令，正在建立加密隧道..."
+
+		                        # [防线穿越] 借由 Base64 编码对下发特征进行混淆与防篡改护甲加持
+		                        ALIAS_B64=$(echo -n "$NEW_ALIAS" | base64 | tr -d '\n' | tr '+/' '-_')
+		                        # 优先用 HMAC_SECRET 签名，失败回退 CHAT_ID 签名（兼容未完成密钥同步的节点）
+		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}" "$AGENT_FP")
+		                        if [ "$RESPONSE" == "FAILED" ] || [[ "$RESPONSE" == *"401"* ]] || [[ "$RESPONSE" == *"Signature"* ]]; then
+		                            echo "[ℹ️] HMAC_SECRET 签名失败，回退 CHAT_ID 重试..." >&2
+		                            RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_rename" "&b64=${ALIAS_B64}" "$AGENT_FP" "$CHAT_ID")
+		                        fi
                         
                         if [ "$RESPONSE" == "FAILED" ]; then
                             send_msg "$CHAT_ID" "❌ 指令下发超时！为防范劫持风险，已终止请求。"
