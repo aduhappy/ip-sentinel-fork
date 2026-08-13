@@ -345,6 +345,9 @@ try:
     raw = raw.replace('_', ',')
     # 按逗号拆分，去除方括号，过滤空值
     ips = [ip.strip().strip('[]') for ip in raw.split(',') if ip.strip()]
+    # 空 IP 列表 → 拦截
+    if not ips:
+        sys.exit(0)
     for ip_str in ips:
         # 处理 IPv4_IPv6 混合格式（取第一部分）
         ip_str = ip_str.split('_')[0]
