@@ -52,7 +52,8 @@ DYNAMIC_IP_PREF="-${IP_PREF:-4}"
 
 if [[ -n "$BIND_IP" && "$BIND_IP" =~ ^[0-9a-fA-F:\.]+$ ]]; then
     RAW_BIND_IP=$(echo "$BIND_IP" | tr -d '[]')
-    if ! ip addr show 2>/dev/null | grep -qw "$RAW_BIND_IP"; then
+    # [IPv6 修复] 改用 grep -Fq 固定字符串匹配，避免冒号被误认为单词边界
+    if ! ip addr show 2>/dev/null | grep -Fq "$RAW_BIND_IP"; then
         CURL_BIND_ARGS=()
     else
         CURL_BIND_ARGS=(--interface "$BIND_IP")
