@@ -336,19 +336,24 @@ while true; do
                 fi
                 AGENT_VERSION=$(echo "$RAW_VERSION" | tr -cd 'a-zA-Z0-9._-' | cut -c 1-20)
                 
-                # SSRF 拦截墙（使用 Python ipaddress 库全面验证）
+                # SSRF 拦截墙（使用 Python ipaddress 库全面验证 — 遍历所有 IP）
                 if echo "$AGENT_IP" | python3 -c "
 import sys, ipaddress
 try:
     raw = sys.stdin.read().strip()
-    # 处理逗号分隔的多 IP（取第一个做 SSRF 检查）
-    first_ip = raw.split(',')[0].strip().strip('[]')
-    # 处理下划线分隔的 IPv4_IPv6 格式（取 IPv4 部分）
-    first_ip = first_ip.split('_')[0]
-    ip = ipaddress.ip_address(first_ip)
-    if ip.is_private or ip.is_loopback or ip.is_link_local or \
-       ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-        sys.exit(0)
+    # 统一分隔符：下划线转逗号
+    raw = raw.replace('_', ',')
+    # 按逗号拆分，去除方括号，过滤空值
+    ips = [ip.strip().strip('[]') for ip in raw.split(',') if ip.strip()]
+    for ip_str in ips:
+        # 处理 IPv4_IPv6 混合格式（取第一部分）
+        ip_str = ip_str.split('_')[0]
+        ip = ipaddress.ip_address(ip_str)
+        # 任一 IP 是内网/回环/链路本地/多播/保留/未指定 → 拦截
+        if ip.is_private or ip.is_loopback or ip.is_link_local or \
+           ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            sys.exit(0)
+    # 所有 IP 都是公网 → 放行
     sys.exit(1)
 except ValueError:
     sys.exit(0)
