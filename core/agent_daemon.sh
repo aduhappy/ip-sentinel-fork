@@ -193,10 +193,23 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     return
                 
                 # [身份核验] 数据完整性校验，使用 compare_digest 免疫时序探测攻击
-                msg = f"{req_path}:{req_t}".encode('utf-8')
-                expected_sign = hmac.new(AUTH_TOKEN.encode('utf-8'), msg, hashlib.sha256).hexdigest()
-                sign_ok = hmac.compare_digest(expected_sign, req_sign)
-                
+                # [HMAC v2] 签名覆盖路径 + 全部业务参数（除 t/sign 外），防止中间人篡改 key/sha256/mod/b64 等参数；
+                # 规范化算法与 Master canonical_query 一致：按 & 拆分原始查询串 → 剔除空段 → 排序 → 以 & 拼接
+                biz_params = [p for p in parsed.query.split('&') if p and p.split('=', 1)[0] not in ('t', 'sign')]
+                sign_msgs = [f"v2:{req_path}?{'&'.join(sorted(biz_params))}:{req_t}".encode('utf-8')]
+                # v1 旧格式（仅签路径）只对不携带业务参数的请求放行：无可篡改内容，同时保持旧版 Master 基础指令可用
+                if not biz_params:
+                    sign_msgs.append(f"{req_path}:{req_t}".encode('utf-8'))
+
+                def sign_matches(key):
+                    for msg in sign_msgs:
+                        expected_sign = hmac.new(key.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+                        if hmac.compare_digest(expected_sign, req_sign):
+                            return True
+                    return False
+
+                sign_ok = sign_matches(AUTH_TOKEN)
+
                 # [HMAC 密钥同步] 引导式验签（仅 /setkey）：已持有旧随机密钥的 Agent，在密钥轮换时刻
                 # 额外接受以 CHAT_ID 签名的 setkey 指令（注册时双方唯一已知共享秘密），确保密钥可平滑下发。
                 # [安全] 引导仅当 AUTH_TOKEN 仍等于 CHAT_ID（密钥尚未轮换的初始状态）时有效；
@@ -204,8 +217,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 # 堵死"CHAT_ID 泄露 → 离线伪造 /setkey 轮换密钥"的节点失联攻击。
                 if not sign_ok and req_path == '/setkey' and AUTH_TOKEN == CHAT_ID:
                     try:
-                        bootstrap_expected = hmac.new(str(CHAT_ID).encode('utf-8'), msg, hashlib.sha256).hexdigest()
-                        sign_ok = hmac.compare_digest(bootstrap_expected, req_sign)
+                        sign_ok = sign_matches(str(CHAT_ID))
                     except Exception:
                         pass
                 

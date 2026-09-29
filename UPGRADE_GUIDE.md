@@ -508,6 +508,18 @@ grep -rn "$FORK_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/null
 - 建议在 **所有节点升级完成后**，通过重新安装（选择「保留原配置」）为每个节点生成独立的 `HMAC_SECRET`。
 - 如果你手动修改过 `HMAC_SECRET`，请确保 Master 和 Agent 使用相同的密钥——这需要在 Master 和 Agent 的配置文件中同步设置。
 
+#### 签名格式 v2（参数全覆盖）兼容矩阵
+
+旧签名（v1）只覆盖 `路径:时间戳`，查询参数（`key`/`sha256`/`mod`/`state`/`b64`）不在签名内，可被中间人篡改。v2 签名改为覆盖 `路径 + 排序后的全部业务参数 + 时间戳`。
+
+| 组合 | 无参指令（巡逻/战报/日志/声呐/指纹） | 带参指令（OTA/开关/改名/setkey） |
+|:---|:---:|:---:|
+| 新 Master → 新 Agent | ✅ v2 | ✅ v2 |
+| 新 Master → 旧 Agent | ✅ 自动降级 v1 | ✅ 自动降级 v1（保证可 OTA 升级） |
+| 旧 Master → 新 Agent | ✅ v1 | ❌ 401（新 Agent 拒绝不签参数的请求） |
+
+因此仍须 **先升级 Master，再升级 Agent**；Agent 全部升级后，带参指令即全程受 v2 签名保护。
+
 ### 7.2 REPO_RAW_URL 指向 fork 仓库的单点依赖风险
 
 安全加固分支的所有安装脚本、更新脚本、OTA 拉取均指向：

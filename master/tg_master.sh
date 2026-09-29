@@ -86,22 +86,45 @@ db_exec() {
     printf ".timeout 5000\n%s\n" "$1" | sqlite3 "$DB_FILE"
 }
 
+# [HMAC v2] 查询参数规范化：按 & 拆分 → 剔除空段 → 字节序排序 → 以 & 拼接（与 Agent 端算法严格一致）
+canonical_query() {
+    local part out=""
+    local -a parts
+    IFS='&' read -r -a parts <<< "$1"
+    while IFS= read -r part; do
+        [ -z "$part" ] && continue
+        out="${out:+${out}&}${part}"
+    done < <(printf '%s\n' "${parts[@]}" | LC_ALL=C sort)
+    printf '%s' "$out"
+}
+
 # [HMAC 动态签名引擎] 下发指令挂载带有时效性的哈希签名，防止重放与中间人篡改
-# 参数：ip port path [sign_key] — sign_key 可选，用于注册阶段以 CHAT_ID 引导签名，默认使用 HMAC_SECRET
+# 参数：ip port path [sign_key] [extra_query] [sig_ver]
+#   sign_key    可选，用于注册阶段以 CHAT_ID 引导签名，默认使用 HMAC_SECRET
+#   extra_query 业务参数（形如 "&k=v&k2=v2"），拼接在 URL 末尾
+#   sig_ver     v2（默认）签名覆盖路径 + 全部业务参数；v1 仅签路径，只用于兼容未升级的旧 Agent
 generate_signed_url() {
     local target_ip=$1
     local target_port=$2
     local action_path=$3
     local override_key=$4
+    local extra_query=$5
+    local sig_ver=${6:-v2}
     local current_t=$(date +%s)
-    
-    local payload="${action_path}:${current_t}"
+
+    # [安全] v1 签名不覆盖查询参数，中间人可篡改 key/sha256/mod/b64 等参数而不破坏签名；v2 将其全部纳入签名
+    local payload
+    if [ "$sig_ver" = "v1" ]; then
+        payload="${action_path}:${current_t}"
+    else
+        payload="v2:${action_path}?$(canonical_query "$extra_query"):${current_t}"
+    fi
     # [v4.1.7 致命修复] 弃用 -hmac，改用 -macopt 标准语法，彻底杜绝 TG 群组负数 ID 导致的 OpenSSL 参数注入崩溃
     # [P0-003] 独立密钥体系：优先使用 HMAC_SECRET 作为 HMAC 签名密钥，回退至 CHAT_ID 确保向后兼容
     local HMAC_KEY="${override_key:-${HMAC_SECRET:-$CHAT_ID}}"
     local signature=$(echo -n "$payload" | openssl dgst -sha256 -mac HMAC -macopt key:"$HMAC_KEY" | awk '{print $NF}')
-    
-    echo "https://${target_ip}:${target_port}${action_path}?t=${current_t}&sign=${signature}"
+
+    echo "https://${target_ip}:${target_port}${action_path}?t=${current_t}&sign=${signature}${extra_query}"
 }
 
 # ==========================================================
@@ -121,30 +144,35 @@ call_agent() {
     IFS=',' read -r -a ip_array <<< "$clean_ips"
     for ip in "${ip_array[@]}"; do
         if [ -n "$ip" ]; then
-            local url=$(generate_signed_url "$ip" "$port" "$path" "$sign_key")
-            [ -n "$suffix" ] && url="${url}${suffix}"
+            [ -z "$cert_fingerprint" ] && echo "[⚠️ P1-002] 节点 $ip 无证书指纹，使用 --insecure 回退模式（建议升级 Agent）" >&2
 
-            # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
-            if [ -n "$cert_fingerprint" ]; then
-                res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
-            else
-                echo "[⚠️ P1-002] 节点 $ip 无证书指纹，使用 --insecure 回退模式（建议升级 Agent）" >&2
-                res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
-            fi
+            # [HMAC 多轨回退] v2 全参数签名优先；仅在验签失败（"401 Unauthorized" 响应）时依次降级：
+            #   v2+主密钥 → v2+CHAT_ID（未完成 setkey 的 Agent）→ v1+主密钥 → v1+CHAT_ID（未升级的旧 Agent，保证 OTA 可达）
+            # 新版 Agent 拒绝携带业务参数的 v1 请求，因此降级不会重新打开参数篡改窗口。
+            # 网络失败（FAILED）与验签无关，不做降级重试，直接切换下一个 IP。
+            local primary_key="${sign_key:-${HMAC_SECRET:-$CHAT_ID}}"
+            local -a sign_keys=("$primary_key")
+            [ "$primary_key" != "$CHAT_ID" ] && sign_keys+=("$CHAT_ID")
+            local sig_ver key url
+            res="FAILED"
+            for sig_ver in v2 v1; do
+                for key in "${sign_keys[@]}"; do
+                    url=$(generate_signed_url "$ip" "$port" "$path" "$key" "$suffix" "$sig_ver")
 
-            # [HMAC 双轨回退] 如果签名失败（401/Signature），用 CHAT_ID 重试
-            if [ "$res" == "FAILED" ] || [[ "$res" == *"401"* ]] || [[ "$res" == *"Signature"* ]]; then
-                if [ "$sign_key" != "$CHAT_ID" ]; then
-                    echo "[ℹ️] 签名验证失败，回退 CHAT_ID 重试..." >&2
-                    local fallback_url=$(generate_signed_url "$ip" "$port" "$path" "$CHAT_ID")
-                    [ -n "$suffix" ] && fallback_url="${fallback_url}${suffix}"
+                    # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
                     if [ -n "$cert_fingerprint" ]; then
-                        res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$fallback_url" || echo "FAILED")
+                        res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
                     else
-                        res=$(curl --insecure -s --connect-timeout 4 -m 12 "$fallback_url" || echo "FAILED")
+                        res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
                     fi
-                fi
-            fi
+
+                    # 仅匹配 Agent 验签拒绝的完整前缀，避免证书指纹等正常响应中偶含 "401" 被误判
+                    if [ "$res" == "FAILED" ] || [[ "$res" != *"401 Unauthorized"* ]]; then
+                        break 2
+                    fi
+                    echo "[ℹ️] 节点 $ip 签名验证失败 (${sig_ver})，降级重试..." >&2
+                done
+            done
 
             if [ "$res" != "FAILED" ] && [ -n "$res" ]; then
                 echo "$res"
@@ -380,9 +408,9 @@ except ValueError:
                     # [修复] /cert_fp 位于 Agent 验签门内，裸 curl 会被 401 拒收。
                     # 注册时刻双方共享秘密是 CHAT_ID（新 Agent 以 CHAT_ID 验签 / 老 Agent 走 CHAT_ID 引导），
                     # 因此用 CHAT_ID 签名构造 URL 拉取指纹，成功后 P1-002 证书固定才能真实生效。
-                    FP_URL=$(generate_signed_url "$AGENT_SINGLE_IP" "$AGENT_PORT" "/cert_fp" "$CHAT_ID")
-                    # 首次获取指纹时 Agent 只有自签名证书，所以需要用 --insecure
-                    CERT_FP=$(curl --insecure -s --connect-timeout 4 -m 8 "$FP_URL" 2>/dev/null || echo "")
+                    # 首次获取指纹时 Agent 只有自签名证书，所以需要用 --insecure（call_agent 在无指纹时自动使用）；
+                    # 经 call_agent 发出以复用 v2 签名及对旧 Agent 的 v1 降级
+                    CERT_FP=$(call_agent "$AGENT_SINGLE_IP" "$AGENT_PORT" "/cert_fp" "" "" "$CHAT_ID" 2>/dev/null)
                     # [P1-002] 校验公钥 DER SHA256 的 base64（44 字符，末位 =）；旧版 hex 指纹不再接受
                     if [ -n "$CERT_FP" ] && [[ "$CERT_FP" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
                         db_exec "UPDATE nodes SET cert_fp='$CERT_FP' WHERE chat_id='$CHAT_ID' AND node_name='$NODE_NAME';"

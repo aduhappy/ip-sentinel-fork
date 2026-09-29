@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### 🔒 安全修复 (Hardened)
+- **HMAC 签名覆盖全部查询参数（v2 签名）** — 旧签名仅覆盖 `路径:时间戳`，`/setkey` 的 `key`、`/trigger_ota` 的 `sha256`、`/trigger_toggle` 的 `mod/state`、`/trigger_rename` 的 `b64` 均可被中间人篡改（例如删除 `sha256` 使 OTA 跳过完整性校验）。v2 签名改为 `v2:路径?排序后全部业务参数:时间戳`，Master/Agent 同算法规范化；新 Agent 仅对无业务参数的请求保留 v1 兼容，Master 在 401 时自动降级以保证旧 Agent 仍可 OTA 升级（对应上游 #108，覆盖范围更完整）
+- **call_agent 网络失败不再重复降级重试** — 仅验签失败时回退，避免离线节点重复等待超时
+
 ## [v4.3.3] - 2026-07-29
 
 ### 🔒 安全修复 (Hardened)
