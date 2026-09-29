@@ -510,21 +510,19 @@ except ValueError:
                     fi
 
 	                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND enable_ota='true';")
-	                    if [ -z "$NODE_DATA" ]; then
+	                    # [安全] 哈希为必填项：拿不到升级包哈希即中止，绝不下发无校验的 OTA（新 Agent 也会以 400 拒收）
+	                    if [ -z "$OTA_VERIFY_HASH" ]; then
+	                        send_msg "$CHAT_ID" "❌ **OTA 已取消**：司令部无法从仓库拉取升级包 (core/install.sh) 计算完整性哈希。%0A🔒 为防止节点在无校验状态下执行升级，本次指令未下发，请检查 Master 网络后重试。"
+	                    elif [ -z "$NODE_DATA" ]; then
 	                        send_msg "$CHAT_ID" "⚠️ 您名下暂无开启 OTA 权限的在线节点。"
 	                    else
-	                        if [ -n "$OTA_VERIFY_HASH" ]; then
-	                            send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A🔒 升级包指纹: \`${OTA_VERIFY_HASH}\`%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
-	                        else
-	                            send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A⚠️ 警告：无法获取升级包哈希，OTA 将跳过完整性验证%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
-	                        fi
+	                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A🔒 升级包指纹: \`${OTA_VERIFY_HASH}\`%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
 		                        # [P1-008] 批量 OTA 结果汇总：后台子 shell 的变量累加不可见，改用临时文件收集各节点回执
 		                        OTA_RPT="/tmp/ota_report_$$.log"
 		                        : > "$OTA_RPT"
 		                        while IFS='|' read -r NNAME AIP APORT AFP; do
 		                            [ -z "$NNAME" ] && continue
-		                            local ota_suffix=""
-		                            [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
+		                            local ota_suffix="&sha256=${OTA_VERIFY_HASH}"
 		                            # 后台并发下发，回执写入临时文件；$$ 作文件后缀防多批次交错，>> 追加防并发写坏
 		                            ( RESP=$(call_agent "$AIP" "$APORT" "/trigger_ota" "$ota_suffix" "$AFP")
 		                              if [[ "$RESP" == *"Action Accepted"* ]]; then
@@ -970,16 +968,22 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 		                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
 		                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
 	
+		                    # [安全] 哈希为必填项：拿不到升级包哈希即中止，绝不下发无校验的 OTA
+		                    if [ -z "$OTA_VERIFY_HASH" ]; then
+		                        if [ -n "$MSG_ID" ]; then
+		                            edit_msg "$CHAT_ID" "$MSG_ID" "❌ **OTA 已取消**：司令部无法从仓库拉取升级包 (core/install.sh) 计算完整性哈希。%0A🔒 为防止节点在无校验状态下执行升级，本次指令未下发，请检查 Master 网络后重试。"
+		                        else
+		                            send_msg "$CHAT_ID" "❌ **OTA 已取消**：司令部无法从仓库拉取升级包 (core/install.sh) 计算完整性哈希。%0A🔒 为防止节点在无校验状态下执行升级，本次指令未下发，请检查 Master 网络后重试。"
+		                        fi
 		                    # [修正点] 必须保留这层外壳判断
-		                    if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+		                    elif [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
 		                        if [ -n "$MSG_ID" ]; then
 		                            edit_msg "$CHAT_ID" "$MSG_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
 		                        else
 		                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
 		                        fi
 		                        
-		                        local ota_suffix=""
-		                        [ -n "$OTA_VERIFY_HASH" ] && ota_suffix="&sha256=${OTA_VERIFY_HASH}"
+		                        local ota_suffix="&sha256=${OTA_VERIFY_HASH}"
 		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ota" "$ota_suffix" "$AGENT_FP")
 	                        
 	                        # [P1-008] OTA 回执分级：区分 200 接受 / 400 哈希拒绝 / 403 策略拒绝 / FAILED 不可达

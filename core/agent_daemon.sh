@@ -557,14 +557,15 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             try:
                 # [P1-008] OTA 完整性校验：从查询参数中提取期望的 SHA256 哈希
                 ota_params = urllib.parse.parse_qs(parsed.query)
-                ota_expected_sha256 = ota_params.get('sha256', [''])[0]
+                ota_expected_sha256 = ota_params.get('sha256', [''])[0].lower()
                 # [安全] 白名单校验：仅接受 64 位 hex，防止注入 ota_script
+                # [安全] 哈希为必填项：缺失即拒绝，杜绝"无哈希 → 跳过完整性校验"的静默降级
                 # 注意：使用独立别名 _re 而非顶层 re，规避 do_GET 内其他路由局部 import re 引起的 UnboundLocalError
                 import re as _re
-                if ota_expected_sha256 and not _re.fullmatch(r'[0-9a-fA-F]{64}', ota_expected_sha256):
+                if not _re.fullmatch(r'[0-9a-f]{64}', ota_expected_sha256):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(b"400 Bad Request: Invalid sha256 format\n")
+                    self.wfile.write(b"400 Bad Request: Missing or invalid sha256\n")
                     return
                 
                 config_mem = {}
@@ -606,7 +607,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                                 repo_url = line.strip().split('=', 1)[1].strip('"\'')
                                 break
                 
-                err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256 or '未提供'}`\n🚀 状态: 升级已取消，节点安全。"
+                err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256}`\n🚀 状态: 升级已取消，节点安全。"
                 err_msg_b64 = base64.b64encode(err_msg.encode('utf-8')).decode('utf-8')
                 
                 tg_url = config_mem.get('TG_API_URL', '')
@@ -625,7 +626,7 @@ if ! curl -fsSL --connect-timeout 10 --retry 2 {repo_url}/core/install.sh -o "$T
 fi
 # [P1-008] OTA 完整性校验：SHA256 哈希对比
 VERIFY_PASS=true
-if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
+if [ -f "$TMP_FILE" ]; then
     DOWNLOADED_HASH=$(sha256sum "$TMP_FILE" | cut -d' ' -f1)
     if [ "$DOWNLOADED_HASH" != "{ota_expected_sha256}" ]; then
         VERIFY_PASS=false
