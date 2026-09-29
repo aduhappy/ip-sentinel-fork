@@ -62,6 +62,11 @@ echo -e "======================================\n"
 sleep 1
 
 REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
+# [OTA 版本锁定] Master 下发的提交 SHA：全部文件改从该不可变提交拉取，杜绝 GitHub Raw 缓存导致的新旧文件混装，
+# 并使本次安装内容与 Master 预先校验的升级包严格一致（仅对 raw.githubusercontent.com 地址生效）
+if [[ "${OTA_PINNED_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [[ "$REPO_RAW_URL" =~ ^(https://raw\.githubusercontent\.com/[^/]+/[^/]+)/[^/]+$ ]]; then
+    REPO_RAW_URL="${BASH_REMATCH[1]}/${OTA_PINNED_REF}"
+fi
 INSTALL_DIR="/opt/ip_sentinel"
 CONFIG_FILE="${INSTALL_DIR}/config.conf"
 

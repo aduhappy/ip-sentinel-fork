@@ -567,6 +567,13 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(b"400 Bad Request: Missing or invalid sha256\n")
                     return
+                # [OTA 版本锁定] 可选的提交 SHA（Master 解析分支得出）：存在时须为 40 位 hex，安装全程从该不可变提交拉取
+                ota_ref = ota_params.get('ref', [''])[0].lower()
+                if ota_ref and not _re.fullmatch(r'[0-9a-f]{40}', ota_ref):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"400 Bad Request: Invalid ref\n")
+                    return
                 
                 config_mem = {}
                 config_path = '/opt/ip_sentinel/config.conf'
@@ -607,6 +614,15 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                                 repo_url = line.strip().split('=', 1)[1].strip('"\'')
                                 break
                 
+                # [OTA 版本锁定] GitHub Raw 地址把分支段替换为提交 SHA，并通过 OTA_PINNED_REF 让 install.sh 后续拉取
+                # 的全部文件同样锁定该提交，避免 Raw 缓存导致新旧文件混装；非 GitHub Raw 地址（自建镜像）维持原分支拉取
+                fetch_url = repo_url
+                pinned_ref = ''
+                pin_match = _re.fullmatch(r'(https://raw\.githubusercontent\.com/[^/]+/[^/]+)/[^/]+', repo_url)
+                if ota_ref and pin_match:
+                    fetch_url = f"{pin_match.group(1)}/{ota_ref}"
+                    pinned_ref = ota_ref
+                
                 err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256}`\n🚀 状态: 升级已取消，节点安全。"
                 err_msg_b64 = base64.b64encode(err_msg.encode('utf-8')).decode('utf-8')
                 
@@ -617,8 +633,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 ota_script = f"""
 trap 'rm -f -- "$0"' EXIT
 export SILENT_OTA="true"
+export OTA_PINNED_REF="{pinned_ref}"
 TMP_FILE="/tmp/ota_agent.sh"
-if ! curl -fsSL --connect-timeout 10 --retry 2 {repo_url}/core/install.sh -o "$TMP_FILE" 2>/dev/null; then
+if ! curl -fsSL --connect-timeout 10 --retry 2 {fetch_url}/core/install.sh -o "$TMP_FILE" 2>/dev/null; then
     MSG=$(echo '{err_msg_b64}' | base64 -d)
     curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" --data-urlencode "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
     echo "OTA Download Failed: Could not fetch install.sh" >> /opt/ip_sentinel/logs/ota_upgrade.log

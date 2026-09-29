@@ -6,6 +6,7 @@
 - **HMAC 签名覆盖全部查询参数（v2 签名）** — 旧签名仅覆盖 `路径:时间戳`，`/setkey` 的 `key`、`/trigger_ota` 的 `sha256`、`/trigger_toggle` 的 `mod/state`、`/trigger_rename` 的 `b64` 均可被中间人篡改（例如删除 `sha256` 使 OTA 跳过完整性校验）。v2 签名改为 `v2:路径?排序后全部业务参数:时间戳`，Master/Agent 同算法规范化；新 Agent 仅对无业务参数的请求保留 v1 兼容，Master 在 401 时自动降级以保证旧 Agent 仍可 OTA 升级（对应上游 #108，覆盖范围更完整）
 - **call_agent 网络失败不再重复降级重试** — 仅验签失败时回退，避免离线节点重复等待超时
 - **OTA 完整性哈希改为必填** — Agent 收到不带（或格式非法的）`sha256` 的 OTA 指令直接 400 拒绝，不再"跳过校验照常升级"；Master 无法从仓库拉取 `install.sh` 计算哈希时中止下发并告警，而非发送无校验的 OTA
+- **OTA 锁定到提交 SHA** — Master 下发 OTA 前经 GitHub API 解析分支当前提交，`install.sh` 哈希与 Agent 端全部文件（核心脚本、版本号、数据）均从该不可变提交拉取，杜绝 GitHub Raw 约 5 分钟缓存造成的新旧文件混装，TG 播报同时显示锁定的提交号便于核对；API 不可达或自建镜像时自动回退为分支地址。Master 校验用临时文件改用 `mktemp`，不再使用固定 `/tmp` 路径
 
 ### 🐛 Bug Fixes
 - **升级后 Master 与节点失联（证书固定失配）** — 两条安装路径（`core/install.sh` 与模块化 `install/sys_daemon.sh`）升级时都会销毁 TLS 证书并整体替换 `core/` 目录，Agent 重铸新证书后与 Master 已固定的公钥指纹不符，所有指令 `FAILED`，直至手动转发新的注册暗号。现升级不再销毁证书，并在替换核心目录前迁移 `cert.pem`/`key.pem`；v4.2.2 前的陈旧证书仍由 `agent_daemon.sh` 按签发日期自动重铸

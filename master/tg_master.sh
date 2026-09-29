@@ -184,6 +184,44 @@ call_agent() {
 }
 
 # ==========================================================
+# [OTA 升级包准备] 解析锁定提交 + 计算 install.sh 完整性哈希
+# 输出全局变量：OTA_REF（40 位提交 SHA，解析失败为空）、OTA_VERIFY_HASH（64 位 hex，失败为空）、OTA_SUFFIX
+# ==========================================================
+prepare_ota_package() {
+    OTA_REF=""
+    OTA_VERIFY_HASH=""
+    OTA_SUFFIX=""
+    local ota_base="${REPO_RAW_URL%/}"
+    # [OTA 版本锁定] GitHub Raw 地址：经 API 解析分支当前提交，Master 校验与 Agent 安装均从该不可变提交拉取，
+    # 杜绝 Raw 缓存（约 5 分钟）造成的新旧文件混装；解析失败或自建镜像时回退为分支地址
+    if [[ "$ota_base" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)$ ]]; then
+        local sha
+        sha=$(curl -fsSL --connect-timeout 5 -m 10 -H "Accept: application/vnd.github.sha" \
+            "https://api.github.com/repos/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/commits/${BASH_REMATCH[3]}" 2>/dev/null)
+        if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            OTA_REF="$sha"
+            ota_base="${ota_base%/*}/${OTA_REF}"
+        fi
+    fi
+
+    # [P1-008] OTA 升级前从仓库拉取 install.sh 并计算 SHA256 哈希
+    local ota_tmp_install
+    ota_tmp_install=$(mktemp /tmp/ota_verify_install.XXXXXX) || return
+    curl -fsSL --connect-timeout 10 --retry 2 "${ota_base}/core/install.sh" -o "$ota_tmp_install" 2>/dev/null
+    if [ -s "$ota_tmp_install" ]; then
+        OTA_VERIFY_HASH=$(sha256sum "$ota_tmp_install" | cut -d' ' -f1)
+    fi
+    rm -f "$ota_tmp_install"
+    # [P1-008] 校验 OTA 哈希格式（防御纵深）
+    if ! [[ "$OTA_VERIFY_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+        OTA_VERIFY_HASH=""
+        return
+    fi
+    OTA_SUFFIX="&sha256=${OTA_VERIFY_HASH}"
+    [ -n "$OTA_REF" ] && OTA_SUFFIX="${OTA_SUFFIX}&ref=${OTA_REF}"
+}
+
+# ==========================================================
 # 2. 数据库热升级自愈系统
 # ==========================================================
 db_exec "PRAGMA journal_mode=WAL;" > /dev/null 2>&1
@@ -496,18 +534,7 @@ except ValueError:
                     ;;
 
                 "all_ota_execute")
-                    # [P1-008] OTA 升级前从仓库拉取 install.sh 并计算 SHA256 哈希
-                    OTA_VERIFY_HASH=""
-                    OTA_TMP_INSTALL="/tmp/ota_verify_install.sh"
-                    curl -fsSL --connect-timeout 10 --retry 2 "${REPO_RAW_URL}/core/install.sh" -o "$OTA_TMP_INSTALL" 2>/dev/null
-                    if [ -s "$OTA_TMP_INSTALL" ]; then
-                        OTA_VERIFY_HASH=$(sha256sum "$OTA_TMP_INSTALL" | cut -d' ' -f1)
-                        rm -f "$OTA_TMP_INSTALL"
-                    fi
-                    # [P1-008] 校验 OTA 哈希格式（防御纵深）
-                    if [ -n "$OTA_VERIFY_HASH" ] && ! [[ "$OTA_VERIFY_HASH" =~ ^[0-9a-f]{64}$ ]]; then
-                        OTA_VERIFY_HASH=""
-                    fi
+                    prepare_ota_package
 
 	                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND enable_ota='true';")
 	                    # [安全] 哈希为必填项：拿不到升级包哈希即中止，绝不下发无校验的 OTA（新 Agent 也会以 400 拒收）
@@ -516,15 +543,16 @@ except ValueError:
 	                    elif [ -z "$NODE_DATA" ]; then
 	                        send_msg "$CHAT_ID" "⚠️ 您名下暂无开启 OTA 权限的在线节点。"
 	                    else
-	                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A🔒 升级包指纹: \`${OTA_VERIFY_HASH}\`%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
+	                        OTA_REF_LINE="⚠️ 未能锁定提交（GitHub API 不可达或自建镜像），按分支地址拉取"
+	                        [ -n "$OTA_REF" ] && OTA_REF_LINE="📌 锁定提交: \`${OTA_REF:0:12}\`"
+	                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在唤醒全舰队执行 OTA 升级...**%0A🔒 升级包指纹: \`${OTA_VERIFY_HASH}\`%0A${OTA_REF_LINE}%0A*(节点升级成功后会主动发回新的入库确认，请注意查收)*"
 		                        # [P1-008] 批量 OTA 结果汇总：后台子 shell 的变量累加不可见，改用临时文件收集各节点回执
 		                        OTA_RPT="/tmp/ota_report_$$.log"
 		                        : > "$OTA_RPT"
 		                        while IFS='|' read -r NNAME AIP APORT AFP; do
 		                            [ -z "$NNAME" ] && continue
-		                            local ota_suffix="&sha256=${OTA_VERIFY_HASH}"
 		                            # 后台并发下发，回执写入临时文件；$$ 作文件后缀防多批次交错，>> 追加防并发写坏
-		                            ( RESP=$(call_agent "$AIP" "$APORT" "/trigger_ota" "$ota_suffix" "$AFP")
+		                            ( RESP=$(call_agent "$AIP" "$APORT" "/trigger_ota" "$OTA_SUFFIX" "$AFP")
 		                              if [[ "$RESP" == *"Action Accepted"* ]]; then
 		                                  echo "OK|$NNAME" >> "$OTA_RPT"
 		                              else
@@ -950,18 +978,7 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 		                    TARGET_NODE=$(echo "${TEXT#*:}" | tr -cd 'a-zA-Z0-9_.-')
 		                    CHAT_ID=$(echo "$CHAT_ID" | tr -cd '0-9-')
 		                    
-		                    # [P1-008] OTA 升级前从仓库拉取 install.sh 并计算 SHA256 哈希
-		                    OTA_VERIFY_HASH=""
-		                    OTA_TMP_INSTALL="/tmp/ota_verify_install.sh"
-		                    curl -fsSL --connect-timeout 10 --retry 2 "${REPO_RAW_URL}/core/install.sh" -o "$OTA_TMP_INSTALL" 2>/dev/null
-		                    if [ -s "$OTA_TMP_INSTALL" ]; then
-		                        OTA_VERIFY_HASH=$(sha256sum "$OTA_TMP_INSTALL" | cut -d' ' -f1)
-		                        rm -f "$OTA_TMP_INSTALL"
-		                    fi
-		                    # [P1-008] 校验 OTA 哈希格式（防御纵深）
-		                    if [ -n "$OTA_VERIFY_HASH" ] && ! [[ "$OTA_VERIFY_HASH" =~ ^[0-9a-f]{64}$ ]]; then
-		                        OTA_VERIFY_HASH=""
-		                    fi
+		                    prepare_ota_package
 		                    
 		                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
 		                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
@@ -983,8 +1000,7 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 		                            send_msg "$CHAT_ID" "⏳ 正在向 \`$TARGET_NODE\` 发送 OTA 触发报文..."
 		                        fi
 		                        
-		                        local ota_suffix="&sha256=${OTA_VERIFY_HASH}"
-		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ota" "$ota_suffix" "$AGENT_FP")
+		                        RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ota" "$OTA_SUFFIX" "$AGENT_FP")
 	                        
 	                        # [P1-008] OTA 回执分级：区分 200 接受 / 400 哈希拒绝 / 403 策略拒绝 / FAILED 不可达
 	                        if [[ "$RESPONSE" == *"Action Accepted"* ]]; then
