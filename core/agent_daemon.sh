@@ -603,7 +603,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     with open('/opt/ip_sentinel/core/install.sh', 'r') as f:
                         for line in f:
                             if line.startswith('REPO_RAW_URL='):
-                                repo_url = line.split('=', 1)[1].strip('"\'')
+                                repo_url = line.strip().split('=', 1)[1].strip('"\'')
                                 break
                 
                 err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256 or '未提供'}`\n🚀 状态: 升级已取消，节点安全。"
