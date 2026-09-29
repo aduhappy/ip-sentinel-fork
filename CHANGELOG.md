@@ -10,6 +10,7 @@
 ### 🐛 Bug Fixes
 - **升级后 Master 与节点失联（证书固定失配）** — 两条安装路径（`core/install.sh` 与模块化 `install/sys_daemon.sh`）升级时都会销毁 TLS 证书并整体替换 `core/` 目录，Agent 重铸新证书后与 Master 已固定的公钥指纹不符，所有指令 `FAILED`，直至手动转发新的注册暗号。现升级不再销毁证书，并在替换核心目录前迁移 `cert.pem`/`key.pem`；v4.2.2 前的陈旧证书仍由 `agent_daemon.sh` 按签发日期自动重铸
 - **探针哈希锁随升级失效** — 同一原因导致 `.probe_hash` 与已锁定的 `ip_probe.sh` 每次升级被清空，锁定机制退化为重新信任首次下载；现一并迁移
+- **核心模块自检仅覆盖 2/8 个文件** — 安装/升级时只校验 `runner.sh` 与 `agent_daemon.sh` 非空，其余 6 个模块下载失败或被截断仍会覆盖上线；现对全部 8 个核心文件做非空 + `bash -n` 语法检查，任一不通过即中止覆写、保留旧版
 - **OTA 读取 REPO_RAW_URL 未去除行尾换行** — 导致结尾引号残留、OTA 脚本引号错位（潜伏缺陷，仅当 `/opt/ip_sentinel/core/install.sh` 存在时触发）
 
 ## [v4.3.3] - 2026-07-29

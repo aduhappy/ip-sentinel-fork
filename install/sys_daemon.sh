@@ -63,13 +63,16 @@ do_deploy_core() {
     curl -fsSL --connect-timeout 10 --retry 3 "${REPO_RAW_URL}/core/mod_trust.sh" -o "${TMP_CORE}/mod_trust.sh"
     curl -fsSL --connect-timeout 10 --retry 3 "${REPO_RAW_URL}/core/mod_quality.sh" -o "${TMP_CORE}/mod_quality.sh"
 
-    # 🛡️ 终极自检墙：一旦任意文件缺失或长度为零，直接熔断放弃覆写，确保宿主不宕机
-    if [ ! -s "${TMP_CORE}/runner.sh" ] || [ ! -s "${TMP_CORE}/agent_daemon.sh" ]; then
-        echo -e "\033[31m❌ 致命错误：核心代码拉取失败！网络阻断或 GitHub Raw 异常。\033[0m"
-        echo "🛡️ 防砖机制触发：已中止覆盖，旧版哨兵引擎仍安全存活中。"
-        rm -rf "$TMP_CORE"
-        exit 1
-    fi
+    # 🛡️ 终极自检墙：任意核心文件缺失、长度为零或存在语法错误（如下载被截断），直接熔断放弃覆写，确保宿主不宕机
+    # （此前仅检查 runner.sh 与 agent_daemon.sh，其余 6 个模块损坏时仍会被覆盖上线）
+    for CORE_FILE in runner.sh updater.sh tg_report.sh agent_daemon.sh uninstall.sh mod_google.sh mod_trust.sh mod_quality.sh; do
+        if [ ! -s "${TMP_CORE}/${CORE_FILE}" ] || ! bash -n "${TMP_CORE}/${CORE_FILE}" 2>/dev/null; then
+            echo -e "\033[31m❌ 致命错误：核心代码 ${CORE_FILE} 拉取失败或已损坏！网络阻断或 GitHub Raw 异常。\033[0m"
+            echo "🛡️ 防砖机制触发：已中止覆盖，旧版哨兵引擎仍安全存活中。"
+            rm -rf "$TMP_CORE"
+            exit 1
+        fi
+    done
 
     echo "⏳ 新引擎校验通过，正在抹杀旧版守护进程..."
     if is_systemd; then
