@@ -349,9 +349,11 @@ done
 rm -f /etc/local.d/ip_sentinel.start 2>/dev/null
 
 if [ "$UPGRADE_MODE" == "true" ]; then
-    # [v4.2.2 终极保障] 平滑升级时强制销毁旧版 TLS 证书与旧版 IP 缓存，逼迫下层组件重铸健康双栈装甲
-    rm -f "${INSTALL_DIR}/core/cert.pem" "${INSTALL_DIR}/core/key.pem" "${INSTALL_DIR}/core/.last_ip" 2>/dev/null
-    echo -e "🧹 历史底层缓存及残旧 TLS 证书已强制销毁，准备重铸安全装甲。"
+    # [v4.2.2 终极保障] 平滑升级时清理旧版 IP 缓存，逼迫下层组件重铸健康双栈装甲
+    # [P1-002] TLS 证书不再随升级销毁：它是 Master 证书固定 (pinnedpubkey) 的锚点，销毁即导致升级后指纹失配失联；
+    # v4.2.2 前的陈旧证书由 agent_daemon.sh 按签发日期自动识别并重铸，无需在此一刀切
+    rm -f "${INSTALL_DIR}/core/.last_ip" 2>/dev/null
+    echo -e "🧹 历史 IP 缓存已清理（TLS 证书保留以维持 Master 证书固定）。"
 
     if [ "$KEEP_LOGS" == "false" ]; then
         rm -rf "${INSTALL_DIR}/logs" 2>/dev/null
@@ -886,6 +888,14 @@ if [ -d "${INSTALL_DIR}/core" ]; then
     rm -rf "${INSTALL_DIR}/core.bak" 2>/dev/null
     cp -a "${INSTALL_DIR}/core" "${INSTALL_DIR}/core.bak"
 fi
+
+# [P1-002/P1-003] 迁移运行态身份文件：TLS 证书/私钥是 Master 证书固定的锚点，探针哈希锁与已锁定探针是
+# 探针完整性的信任锚；若随核心目录一并销毁，升级后 Master 指纹失配失联、探针锁退化为重新信任首次下载
+for KEEP_FILE in cert.pem key.pem .probe_hash ip_probe.sh; do
+    if [ -f "${INSTALL_DIR}/core/${KEEP_FILE}" ]; then
+        cp -a "${INSTALL_DIR}/core/${KEEP_FILE}" "${TMP_CORE}/${KEEP_FILE}"
+    fi
+done
 
 rm -rf "${INSTALL_DIR}/core" 2>/dev/null
 mv "$TMP_CORE" "${INSTALL_DIR}/core"
