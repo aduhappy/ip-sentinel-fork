@@ -1,6 +1,25 @@
 # Changelog
 
-## [v4.3.3] - 2026-07-29
+## [v4.3.2-hardened.1] - 2026-10-01
+
+> **版本号说明**：fork 版本号改为 `<上游基线>-hardened.<序号>`，基线为分叉时的上游 v4.3.2，避免与上游 v4.3.3~v4.3.5（内容不同）重名。`sort -V` 下 `4.3.2 < 4.3.2-hardened.1 < 4.3.2-hardened.2 < 4.3.3`，现有 v4.3.1/v4.3.2 节点会被识别为可升级。
+> **升级顺序**：先升级 Master（首页「升级控制中枢」按钮），再全舰队 OTA；若先用旧 Master OTA 了 Agent，旧 Master 的带参指令（OTA/开关/改名）会被拒绝，升级 Master 后即恢复，不会失联。
+
+### 🔒 安全修复 (Hardened)
+- **HMAC 签名覆盖全部查询参数（v2 签名）** — 旧签名仅覆盖 `路径:时间戳`，`/setkey` 的 `key`、`/trigger_ota` 的 `sha256`、`/trigger_toggle` 的 `mod/state`、`/trigger_rename` 的 `b64` 均可被中间人篡改（例如删除 `sha256` 使 OTA 跳过完整性校验）。v2 签名改为 `v2:路径?排序后全部业务参数:时间戳`，Master/Agent 同算法规范化；新 Agent 仅对无业务参数的请求保留 v1 兼容，Master 在 401 时自动降级以保证旧 Agent 仍可 OTA 升级（对应上游 #108，覆盖范围更完整）
+- **call_agent 网络失败不再重复降级重试** — 仅验签失败时回退，避免离线节点重复等待超时
+- **OTA 完整性哈希改为必填** — Agent 收到不带（或格式非法的）`sha256` 的 OTA 指令直接 400 拒绝，不再"跳过校验照常升级"；Master 无法从仓库拉取 `install.sh` 计算哈希时中止下发并告警，而非发送无校验的 OTA
+- **OTA 锁定到提交 SHA** — Master 下发 OTA 前经 GitHub API 解析分支当前提交，`install.sh` 哈希与 Agent 端全部文件（核心脚本、版本号、数据）均从该不可变提交拉取，杜绝 GitHub Raw 约 5 分钟缓存造成的新旧文件混装，TG 播报同时显示锁定的提交号便于核对；API 不可达或自建镜像时自动回退为分支地址。Master 校验用临时文件改用 `mktemp`，不再使用固定 `/tmp` 路径
+
+### 🐛 Bug Fixes
+- **升级后 Master 与节点失联（证书固定失配）** — 两条安装路径（`core/install.sh` 与模块化 `install/sys_daemon.sh`）升级时都会销毁 TLS 证书并整体替换 `core/` 目录，Agent 重铸新证书后与 Master 已固定的公钥指纹不符，所有指令 `FAILED`，直至手动转发新的注册暗号。现升级不再销毁证书，并在替换核心目录前迁移 `cert.pem`/`key.pem`；v4.2.2 前的陈旧证书仍由 `agent_daemon.sh` 按签发日期自动重铸
+- **探针哈希锁随升级失效** — 同一原因导致 `.probe_hash` 与已锁定的 `ip_probe.sh` 每次升级被清空，锁定机制退化为重新信任首次下载；现一并迁移
+- **核心模块自检仅覆盖 2/8 个文件** — 安装/升级时只校验 `runner.sh` 与 `agent_daemon.sh` 非空，其余 6 个模块下载失败或被截断仍会覆盖上线；现对全部 8 个核心文件做非空 + `bash -n` 语法检查，任一不通过即中止覆写、保留旧版
+- **OTA 读取 REPO_RAW_URL 未去除行尾换行** — 导致结尾引号残留、OTA 脚本引号错位（潜伏缺陷，仅当 `/opt/ip_sentinel/core/install.sh` 存在时触发）
+
+## [v4.3.2-hardened.0] - 2026-07-29
+
+> fork 首轮安全加固。当时 `version.txt` 未随之更新，节点仍显示 v4.3.1/v4.3.2；此前文档中的 "v4.3.3" 均指此版本，与上游 v4.3.3 无关。
 
 ### 🔒 安全修复 (Hardened)
 

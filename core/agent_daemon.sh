@@ -193,10 +193,23 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     return
                 
                 # [身份核验] 数据完整性校验，使用 compare_digest 免疫时序探测攻击
-                msg = f"{req_path}:{req_t}".encode('utf-8')
-                expected_sign = hmac.new(AUTH_TOKEN.encode('utf-8'), msg, hashlib.sha256).hexdigest()
-                sign_ok = hmac.compare_digest(expected_sign, req_sign)
-                
+                # [HMAC v2] 签名覆盖路径 + 全部业务参数（除 t/sign 外），防止中间人篡改 key/sha256/mod/b64 等参数；
+                # 规范化算法与 Master canonical_query 一致：按 & 拆分原始查询串 → 剔除空段 → 排序 → 以 & 拼接
+                biz_params = [p for p in parsed.query.split('&') if p and p.split('=', 1)[0] not in ('t', 'sign')]
+                sign_msgs = [f"v2:{req_path}?{'&'.join(sorted(biz_params))}:{req_t}".encode('utf-8')]
+                # v1 旧格式（仅签路径）只对不携带业务参数的请求放行：无可篡改内容，同时保持旧版 Master 基础指令可用
+                if not biz_params:
+                    sign_msgs.append(f"{req_path}:{req_t}".encode('utf-8'))
+
+                def sign_matches(key):
+                    for msg in sign_msgs:
+                        expected_sign = hmac.new(key.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+                        if hmac.compare_digest(expected_sign, req_sign):
+                            return True
+                    return False
+
+                sign_ok = sign_matches(AUTH_TOKEN)
+
                 # [HMAC 密钥同步] 引导式验签（仅 /setkey）：已持有旧随机密钥的 Agent，在密钥轮换时刻
                 # 额外接受以 CHAT_ID 签名的 setkey 指令（注册时双方唯一已知共享秘密），确保密钥可平滑下发。
                 # [安全] 引导仅当 AUTH_TOKEN 仍等于 CHAT_ID（密钥尚未轮换的初始状态）时有效；
@@ -204,8 +217,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 # 堵死"CHAT_ID 泄露 → 离线伪造 /setkey 轮换密钥"的节点失联攻击。
                 if not sign_ok and req_path == '/setkey' and AUTH_TOKEN == CHAT_ID:
                     try:
-                        bootstrap_expected = hmac.new(str(CHAT_ID).encode('utf-8'), msg, hashlib.sha256).hexdigest()
-                        sign_ok = hmac.compare_digest(bootstrap_expected, req_sign)
+                        sign_ok = sign_matches(str(CHAT_ID))
                     except Exception:
                         pass
                 
@@ -545,14 +557,22 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             try:
                 # [P1-008] OTA 完整性校验：从查询参数中提取期望的 SHA256 哈希
                 ota_params = urllib.parse.parse_qs(parsed.query)
-                ota_expected_sha256 = ota_params.get('sha256', [''])[0]
+                ota_expected_sha256 = ota_params.get('sha256', [''])[0].lower()
                 # [安全] 白名单校验：仅接受 64 位 hex，防止注入 ota_script
+                # [安全] 哈希为必填项：缺失即拒绝，杜绝"无哈希 → 跳过完整性校验"的静默降级
                 # 注意：使用独立别名 _re 而非顶层 re，规避 do_GET 内其他路由局部 import re 引起的 UnboundLocalError
                 import re as _re
-                if ota_expected_sha256 and not _re.fullmatch(r'[0-9a-fA-F]{64}', ota_expected_sha256):
+                if not _re.fullmatch(r'[0-9a-f]{64}', ota_expected_sha256):
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(b"400 Bad Request: Invalid sha256 format\n")
+                    self.wfile.write(b"400 Bad Request: Missing or invalid sha256\n")
+                    return
+                # [OTA 版本锁定] 可选的提交 SHA（Master 解析分支得出）：存在时须为 40 位 hex，安装全程从该不可变提交拉取
+                ota_ref = ota_params.get('ref', [''])[0].lower()
+                if ota_ref and not _re.fullmatch(r'[0-9a-f]{40}', ota_ref):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"400 Bad Request: Invalid ref\n")
                     return
                 
                 config_mem = {}
@@ -591,10 +611,19 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     with open('/opt/ip_sentinel/core/install.sh', 'r') as f:
                         for line in f:
                             if line.startswith('REPO_RAW_URL='):
-                                repo_url = line.split('=', 1)[1].strip('"\'')
+                                repo_url = line.strip().split('=', 1)[1].strip('"\'')
                                 break
                 
-                err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256 or '未提供'}`\n🚀 状态: 升级已取消，节点安全。"
+                # [OTA 版本锁定] GitHub Raw 地址把分支段替换为提交 SHA，并通过 OTA_PINNED_REF 让 install.sh 后续拉取
+                # 的全部文件同样锁定该提交，避免 Raw 缓存导致新旧文件混装；非 GitHub Raw 地址（自建镜像）维持原分支拉取
+                fetch_url = repo_url
+                pinned_ref = ''
+                pin_match = _re.fullmatch(r'(https://raw\.githubusercontent\.com/[^/]+/[^/]+)/[^/]+', repo_url)
+                if ota_ref and pin_match:
+                    fetch_url = f"{pin_match.group(1)}/{ota_ref}"
+                    pinned_ref = ota_ref
+                
+                err_msg = f"❌ **OTA 熔断告警**\n📍 节点: `{config_mem.get('NODE_ALIAS', '未知')}`\n⚠️ 原因: 脚本完整性校验未通过，下载可能不完整或被篡改。\n🔒 期望哈希: `{ota_expected_sha256}`\n🚀 状态: 升级已取消，节点安全。"
                 err_msg_b64 = base64.b64encode(err_msg.encode('utf-8')).decode('utf-8')
                 
                 tg_url = config_mem.get('TG_API_URL', '')
@@ -604,8 +633,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 ota_script = f"""
 trap 'rm -f -- "$0"' EXIT
 export SILENT_OTA="true"
+export OTA_PINNED_REF="{pinned_ref}"
 TMP_FILE="/tmp/ota_agent.sh"
-if ! curl -fsSL --connect-timeout 10 --retry 2 {repo_url}/core/install.sh -o "$TMP_FILE" 2>/dev/null; then
+if ! curl -fsSL --connect-timeout 10 --retry 2 {fetch_url}/core/install.sh -o "$TMP_FILE" 2>/dev/null; then
     MSG=$(echo '{err_msg_b64}' | base64 -d)
     curl -s -m 10 -X POST "{tg_url}" -d "chat_id={chat_id}" --data-urlencode "text=$MSG" -d "parse_mode=Markdown" > /dev/null 2>&1
     echo "OTA Download Failed: Could not fetch install.sh" >> /opt/ip_sentinel/logs/ota_upgrade.log
@@ -613,7 +643,7 @@ if ! curl -fsSL --connect-timeout 10 --retry 2 {repo_url}/core/install.sh -o "$T
 fi
 # [P1-008] OTA 完整性校验：SHA256 哈希对比
 VERIFY_PASS=true
-if [ -n "{ota_expected_sha256}" ] && [ -f "$TMP_FILE" ]; then
+if [ -f "$TMP_FILE" ]; then
     DOWNLOADED_HASH=$(sha256sum "$TMP_FILE" | cut -d' ' -f1)
     if [ "$DOWNLOADED_HASH" != "{ota_expected_sha256}" ]; then
         VERIFY_PASS=false

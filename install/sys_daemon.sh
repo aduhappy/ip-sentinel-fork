@@ -24,9 +24,11 @@ do_clean_env() {
     rm -f /etc/local.d/ip_sentinel.start 2>/dev/null
 
     if [ "$UPGRADE_MODE" == "true" ]; then
-        # [v4.2.2 终极保障] 平滑升级时强制销毁旧版 TLS 证书与旧版 IP 缓存，逼迫下层组件重铸健康双栈装甲
-        rm -f "${INSTALL_DIR}/core/cert.pem" "${INSTALL_DIR}/core/key.pem" "${INSTALL_DIR}/core/.last_ip" 2>/dev/null
-        echo -e "🧹 历史底层缓存及残旧 TLS 证书已强制销毁，准备重铸安全装甲。"
+        # [v4.2.2 终极保障] 平滑升级时清理旧版 IP 缓存，逼迫下层组件重铸健康双栈装甲
+        # [P1-002] TLS 证书不再随升级销毁：它是 Master 证书固定 (pinnedpubkey) 的锚点，销毁即导致升级后指纹失配失联；
+        # v4.2.2 前的陈旧证书由 agent_daemon.sh 按签发日期自动识别并重铸，无需在此一刀切
+        rm -f "${INSTALL_DIR}/core/.last_ip" 2>/dev/null
+        echo -e "🧹 历史 IP 缓存已清理（TLS 证书保留以维持 Master 证书固定）。"
 
         if [ "$KEEP_LOGS" == "false" ]; then
             rm -rf "${INSTALL_DIR}/logs" 2>/dev/null
@@ -61,13 +63,16 @@ do_deploy_core() {
     curl -fsSL --connect-timeout 10 --retry 3 "${REPO_RAW_URL}/core/mod_trust.sh" -o "${TMP_CORE}/mod_trust.sh"
     curl -fsSL --connect-timeout 10 --retry 3 "${REPO_RAW_URL}/core/mod_quality.sh" -o "${TMP_CORE}/mod_quality.sh"
 
-    # 🛡️ 终极自检墙：一旦任意文件缺失或长度为零，直接熔断放弃覆写，确保宿主不宕机
-    if [ ! -s "${TMP_CORE}/runner.sh" ] || [ ! -s "${TMP_CORE}/agent_daemon.sh" ]; then
-        echo -e "\033[31m❌ 致命错误：核心代码拉取失败！网络阻断或 GitHub Raw 异常。\033[0m"
-        echo "🛡️ 防砖机制触发：已中止覆盖，旧版哨兵引擎仍安全存活中。"
-        rm -rf "$TMP_CORE"
-        exit 1
-    fi
+    # 🛡️ 终极自检墙：任意核心文件缺失、长度为零或存在语法错误（如下载被截断），直接熔断放弃覆写，确保宿主不宕机
+    # （此前仅检查 runner.sh 与 agent_daemon.sh，其余 6 个模块损坏时仍会被覆盖上线）
+    for CORE_FILE in runner.sh updater.sh tg_report.sh agent_daemon.sh uninstall.sh mod_google.sh mod_trust.sh mod_quality.sh; do
+        if [ ! -s "${TMP_CORE}/${CORE_FILE}" ] || ! bash -n "${TMP_CORE}/${CORE_FILE}" 2>/dev/null; then
+            echo -e "\033[31m❌ 致命错误：核心代码 ${CORE_FILE} 拉取失败或已损坏！网络阻断或 GitHub Raw 异常。\033[0m"
+            echo "🛡️ 防砖机制触发：已中止覆盖，旧版哨兵引擎仍安全存活中。"
+            rm -rf "$TMP_CORE"
+            exit 1
+        fi
+    done
 
     echo "⏳ 新引擎校验通过，正在抹杀旧版守护进程..."
     if is_systemd; then
@@ -80,6 +85,14 @@ do_deploy_core() {
     pkill -9 -f "tg_report.sh" >/dev/null 2>&1 || true
     pkill -9 -f "updater.sh" >/dev/null 2>&1 || true
     pkill -9 -f "sentinel_scheduler.sh" >/dev/null 2>&1 || true
+
+    # [P1-002/P1-003] 迁移运行态身份文件：TLS 证书/私钥是 Master 证书固定的锚点，探针哈希锁与已锁定探针是
+    # 探针完整性的信任锚；若随核心目录一并销毁，升级后 Master 指纹失配失联、探针锁退化为重新信任首次下载
+    for KEEP_FILE in cert.pem key.pem .probe_hash ip_probe.sh; do
+        if [ -f "${INSTALL_DIR}/core/${KEEP_FILE}" ]; then
+            cp -a "${INSTALL_DIR}/core/${KEEP_FILE}" "${TMP_CORE}/${KEEP_FILE}"
+        fi
+    done
 
     rm -rf "${INSTALL_DIR}/core" 2>/dev/null
     mv "$TMP_CORE" "${INSTALL_DIR}/core"

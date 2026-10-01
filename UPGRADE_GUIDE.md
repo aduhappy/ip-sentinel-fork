@@ -165,7 +165,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-for
 💡 司令部雷达提示：检测到本机已部署过 Master 中枢。
 👉 是否按原配置直接进行平滑升级？(y/n, 默认y): y    ← 回车即可
 👉 是否保留历史节点数据库 (SQLite)？(y/n, 默认y): y    ← 建议保留
-✅ 已激活 [平滑升级模式]，版本已锚定为 v4.3.1...
+✅ 已激活 [平滑升级模式]，版本已锚定为 v4.3.2-hardened.1...
 ```
 
 ### 3.2 手动替换方式（离线环境备选）
@@ -341,8 +341,8 @@ echo -n "Agent: "; grep "^AGENT_VERSION=" /opt/ip_sentinel/config.conf 2>/dev/nu
 预期输出：
 
 ```
-Master: MASTER_VERSION="4.3.1"
-Agent:  AGENT_VERSION="4.3.2"
+Master: MASTER_VERSION="4.3.2-hardened.1"
+Agent:  AGENT_VERSION="4.3.2-hardened.1"
 ```
 
 ### 5.2 HMAC_SECRET 确认
@@ -507,6 +507,22 @@ grep -rn "$FORK_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/null
 - Master/Agent 可以混合升级，不会出现通讯中断。
 - 建议在 **所有节点升级完成后**，通过重新安装（选择「保留原配置」）为每个节点生成独立的 `HMAC_SECRET`。
 - 如果你手动修改过 `HMAC_SECRET`，请确保 Master 和 Agent 使用相同的密钥——这需要在 Master 和 Agent 的配置文件中同步设置。
+
+#### 签名格式 v2（参数全覆盖）兼容矩阵
+
+旧签名（v1）只覆盖 `路径:时间戳`，查询参数（`key`/`sha256`/`mod`/`state`/`b64`）不在签名内，可被中间人篡改。v2 签名改为覆盖 `路径 + 排序后的全部业务参数 + 时间戳`。
+
+| 组合 | 无参指令（巡逻/战报/日志/声呐/指纹） | 带参指令（OTA/开关/改名/setkey） |
+|:---|:---:|:---:|
+| 新 Master → 新 Agent | ✅ v2 | ✅ v2 |
+| 新 Master → 旧 Agent | ✅ 自动降级 v1 | ✅ 自动降级 v1（保证可 OTA 升级） |
+| 旧 Master → 新 Agent | ✅ v1 | ❌ 401（新 Agent 拒绝不签参数的请求） |
+
+因此仍须 **先升级 Master，再升级 Agent**；Agent 全部升级后，带参指令即全程受 v2 签名保护。
+
+- **顺序弄反也不会失联**：若已用旧 Master 先 OTA 了 Agent，旧 Master 的巡逻/战报/日志/声呐仍可用，仅 OTA/开关/改名返回 401；点击 Master 首页「升级控制中枢」（不经过 Agent）完成自升级后即全部恢复。
+- **升级不再更换 TLS 证书**：v4.3.2-hardened.1 起升级会保留 Agent 证书，Master 已固定的指纹持续有效，升级后无需重新转发注册暗号。
+- **刚推送新代码后的 OTA 可能被安全拒绝**：旧 Agent 按分支地址下载 `install.sh`，GitHub Raw 约 5 分钟缓存期内可能取到旧文件，与 Master 计算的哈希不符时会拒绝升级并发 TG 告警（节点保持原版本运行），稍后重试即可。升级到 v4.3.2-hardened.1 后的 Agent 按提交 SHA 下载，不再有此问题。
 
 ### 7.2 REPO_RAW_URL 指向 fork 仓库的单点依赖风险
 
