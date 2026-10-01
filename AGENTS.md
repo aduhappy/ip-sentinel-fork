@@ -5,120 +5,105 @@
 > 协议：AGPL-3.0
 
 ## 📍 TL;DR
-- **当前阶段**：全量安全修复完成（3×P0 + 12×P1 + 多项 P2/P3），升级路径加固完毕，文档配套更新
-- **2026-07-30 复审修复**：排查"部署后无法工作"根因 → 修复 HMAC 密钥链路断裂（Master 签发 /setkey 下发）、P1-002 证书指纹格式（hex→公钥 base64 + 补 -k）、P1-008 sha256 白名单防注入、P1-003 探针哈希重锁机制
-- **下一步**：部署 main 分支生产使用，按需同步上游变更
-- **最后操作**：双层仓库简化为单仓库，默认分支 main，配置推送至 aduhappy/ip-sentinel-fork
+- **当前版本**：`4.3.2-hardened.4`（Master / Agent 同号，见 `version.txt`）
+- **当前阶段**：第二轮安全复审修复完成并已并入 main（2026-09-29 ~ 10-01，详见 §2.2）
+- **下一步**：真机验证一次完整升级链路（先升 Master → 全舰队 OTA → 换 Bot 凭证），按需同步上游
+- **使用者**：仅仓库所有者本人使用私有中枢模式；测试通过即可直接合并 main
 - **阻塞**：无
 
 ---
 
 ## 1. 北极星
 
-对 IP-Sentinel 进行系统化安全审计 + fork 修复加固。产出：
-- 审计报告（BUG_VERIFICATION_REPORT.md、PATCHES.md、README_BUGS.md）
-- 安全加固分支（28 个加固 commit，覆盖全部 P0/P1 修复 + 新增功能 + 文档，已并入 main）
+对 IP-Sentinel 进行系统化安全审计 + fork 修复加固，产出可直接部署的加固版 main 分支，并保持对存量节点的无缝升级。
 
 ## 2. 当前状态
 
-### 审计结果
-- ✅ **3× P0**（严重）：SSRF 绕过、os.system 命令注入、HMAC 密钥用 CHAT_ID、SSRF 反转回归、OTA HMAC 降级
-- ✅ **12× P1**（高危）：证书验证、OTA 签名、探针校验、SQL 注入、curl -k MITM、Nonce 耗尽、线程耗尽、Toggle 注入、CURL 数组化、OTA curl 熔断、updater 加固、agent_daemon 加固
-- ✅ **9× P2**（中危）+ **5× P3**（低危）
-- ✅ **全部 P0/P1 已修复**，零待办
-- ✅ **所有安全修复经多方代码审查确认**
-- ✅ **双层仓库已简化为单仓库**（主仓库→origin/aduhappy/ip-sentinel-fork）
+### 2.1 第一轮（2026-07，原 hardened 分支，已并入 main）
 
-### 安全加固分支统计（原 hardened 分支）
+- ✅ 3× P0：SSRF 绕过与逻辑反转回归、`os.system` 命令注入、HMAC 独立密钥、OTA 路径 HMAC 降级
+- ✅ 12× P1：证书固定、OTA 包 SHA256、探针哈希锁、SQL/Toggle 注入、Nonce 上限与线程锁、线程数限制、CURL 数组化、OTA 下载熔断、updater/agent_daemon 加固、OTA core.bak 回退
+- ✅ 9× P2 + 5× P3；`upgrade.sh` 一键备份升级；README/CHANGELOG/UPGRADE_GUIDE
+- 审计报告（BUG_VERIFICATION_REPORT.md、PATCHES.md、README_BUGS.md）存放在本地 `audit/`，已被 `.gitignore` 排除，**不在仓库中**
 
-```text
-总加固 commit:             28 个
-   安全修复:              16 个 (3×P0 + 12×P1 + 1×P2)
-   新功能:                 4 个 (版本追踪、备份回退、升级脚本、OTA 熔断)
-   文档更新:               5 个 (README/CHANGELOG/UPGRADE_GUIDE/AGENTS)
-   配置修复:               3 个 (MOD_NAME 白名单、ENABLE_MASTER_OTA、REPO_RAW_URL)
-```
+### 2.2 第二轮复审（2026-09-29 ~ 10-01）
 
-### 已修复（完整清单）
+复审发现第一轮的若干修复只完成了一半，以及新的高危问题。全部已修复、测试、并入 main：
 
-| 问题 | 等级 | 状态 |
-|:----|:----:|:----:|
-| SSRF 保护（Python ipaddress 库） | P0 | ✅ |
-| SSRF 逻辑反转回归修复（! 否定符+退出码） | P0 | ✅ |
-| os.system→subprocess 命令注入 | P0 | ✅ |
-| HMAC 独立密钥（openssl rand -hex 32） | P0 | ✅ |
-| OTA 路径 HMAC_SECRET 缺失/降级 | P0 | ✅ |
-| 证书固定验证（pinnedpubkey 替代 --insecure） | P1 | ✅ |
-| OTA 包 SHA256 完整性（Master+Agent 双端） | P1 | ✅ |
-| 探针脚本 SHA256 校验（哈希锁定/不匹配拒绝） | P1 | ✅ |
-| Toggle 注入防护（MOD_NAME 白名单） | P1 | ✅ |
-| Nonce 缓存上限（OrderedDict + 100000 + 线程锁） | P1 | ✅ |
-| 线程数限制（BoundedSemaphore 替代竞态 active_count） | P1 | ✅ |
-| Bash word splitting（CURL_ARGS 数组化） | P1 | ✅ |
-| OTA curl 下载失败熔断 + 空文件检查 | P1 | ✅ |
-| Master OTA SHA256 完整性校验 | P1 | ✅ |
-| updater.sh 安全加固（trap 清理 + SHA256 拒绝） | P1 | ✅ |
-| agent_daemon.sh 加固（Nonce 锁 + Semaphore + query 修复） | P1 | ✅ |
-| OTA 核心备份回退（core.bak 自动回滚 + TG 通知） | P1 | ✅ |
-| ENABLE_MASTER_OTA 升级后默认开启 | P2 | ✅ |
-| MOD_NAME 白名单移除不支持的 ota | P2 | ✅ |
-| Master 追踪 Agent 版本（数据库 agent_version 列） | P2 | ✅ |
-| Agent 注册携带版本号（第 8 字段） | P2 | ✅ |
+| 问题 | 等级 | 提交 | 版本 |
+|:----|:----:|:----:|:----:|
+| HMAC 签名不覆盖查询参数（可篡改 key/sha256/mod/b64） → v2 全参数签名 | P0 | `3f6f8d16` | .1 |
+| OTA `sha256` 缺失时跳过校验 → 必填 | P1 | `97f5cf1a` | .1 |
+| 升级销毁 TLS 证书 → 升级后 Master 证书固定失配、全部指令 FAILED | P1 | `23c8096d` | .1 |
+| 升级清空 `.probe_hash`，探针哈希锁失效 | P1 | `23c8096d` | .1 |
+| 安装自检只查 2/8 个核心文件 | P2 | `398aa0b3` | .1 |
+| OTA 锁定到提交 SHA（防 Raw 缓存新旧混装） | 加固 | `ea103d36` | .1 |
+| OTA 读取 REPO_RAW_URL 未去行尾换行（潜伏） | P3 | `f94d205d` | .1 |
+| 版本号统一为 `<上游基线>-hardened.<n>` | 维护 | `31cd8d4d` | .1 |
+| 注册解析第 7 字段吞并版本号 → `truehardened`，节点被全舰队 OTA 漏掉 | P1 | `3668d71c` | .2 |
+| 首次握手依赖公开的 CHAT_ID → 配对密钥 + 注册暗号携带证书指纹 | P0 | `f76a074d` | .2 |
+| 启动密钥收敛使用空 CHAT_ID，从未生效 | P1 | `2f9fa51a` | .3 |
+| **私有中枢响应任意会话 → 陌生人注册节点即可骗取全局 HMAC_SECRET** → 所有者锁定 | P0 | `3bc5164f` | .3 |
+| 移植上游 #102 全舰队切换 Bot 凭证（按 fork 安全模型改造） | 功能 | `5121a8ab` | .4 |
+| README 如实说明加固范围、公共网关数据流向、对外连接 | 文档 | `8dfd9f93` | .4 |
 
-### 升级路径加固
-| 措施 | 状态 |
-|:----|:----:|
-| OTA 升级前自动备份 core → core.bak | ✅ |
-| 新引擎启动 3 秒验证 + 失败自动回退 | ✅ |
-| 回退后 TG 通知告警 | ✅ |
-| Master OTA 增加 SHA256 完整性校验 | ✅ |
-| OTA curl 失败熔断 + 空文件拒绝执行 | ✅ |
-| Master 数据库追踪 Agent 版本号 | ✅ |
-| 一键备份升级脚本 upgrade.sh（Master/Agent/主子同体） | ✅ |
-| 升级指南 UPGRADE_GUIDE.md | ✅ |
+### 2.3 关键机制速查（改代码前必读）
 
-### README/CHANGELOG 同步
-| 文档 | 状态 |
-|:----|:----:|
-| README.md — 仓库 URL、版本号、安全特性描述 | ✅ |
-| CHANGELOG.md — v4.3.3 完整更新日志 | ✅ |
-| UPGRADE_GUIDE.md — 升级全流程（含回滚） | ✅ |
-| AGENTS.md — 项目状态同步 | ✅ |
+- **版本号**：`<上游基线>-hardened.<n>`，基线为分叉时上游 4.3.2；`sort -V` 下 `4.3.2 < 4.3.2-hardened.1 < 4.3.3`。Master 首页/战报以 `!=` 判断新版本，发版须同步修改 `version.txt` 与 5 个安装入口的兜底版本（`install.sh`、`master/install_master.sh`、`install/master_setup.sh`、`install/env_setup.sh`、`core/install.sh`）。
+- **签名 v2**：`HMAC(key, "v2:<路径>?<按 & 拆分、去空、字节序排序后的业务参数>:<t>")`。Master `canonical_query` 与 Agent `biz_params` 必须同算法。Agent 仅对**无业务参数**的请求接受 v1（`<路径>:<t>`）。Master 仅在 `401 Unauthorized` 时降级：v2+主密钥 → v2+CHAT_ID → v1+主密钥 → v1+CHAT_ID。
+- **Agent 验签密钥优先级**：`HMAC_SECRET` > `PAIR_KEY` > `CHAT_ID`（仅无 PAIR_KEY 的旧节点）。`/setkey`、`/cert_fp` 额外接受 `PAIR_KEY`（支持 Master 重装后重新配对）；`/setkey` 在 `AUTH_TOKEN == CHAT_ID` 时额外接受 CHAT_ID（旧节点引导）。
+- **注册暗号**：`#REGISTER#|地区|节点|IP|端口|别名|OTA|版本|PAIR_KEY|证书指纹`。第 9、10 字段仅私有模式且已有 PAIR_KEY 时追加；官方公共网关模式保持 8 字段。生成点共 4 处：`core/install.sh`（首装/升级、重发选项 3）、`install/ui_menu.sh`（同上）。
+- **PAIR_KEY 生成规则**：首装（私有模式）生成；升级仅当 `HMAC_SECRET` 非空时补发（CHAT_ID 态节点若补发会切换验签密钥而失联）。
+- **所有者锁定**：`master.conf` 的 `OWNER_CHAT_ID`；来源依次为安装时填写 → 升级时库中唯一节点会话 → 空库首个会话；多会话时拒绝一切请求。轮询批次跑在管道子 shell 中，跨批次状态必须落盘到 `master.conf`。
+- **Master 启动时 `$CHAT_ID` 为空**（`master.conf` 不含 CHAT_ID），启动阶段需要会话 ID 时必须从数据库按节点取。
+- **webhook.py 的 `do_GET`**：函数内任何 `import X` 都会让 X 成为整个函数的局部名。不要在其中写 `import urllib.xxx`（会遮蔽顶层 `urllib`，所有请求报错）；用到 `re` 的分支须自行 `import re`。
+- **升级保留文件**：`core/` 整体替换前迁移 `cert.pem`、`key.pem`、`.probe_hash`、`ip_probe.sh`（两条安装路径各一处）。
+
+### 2.4 测试方式
+
+仓库内暂无测试目录。第二轮所有改动均在本地沙箱验证：从 `core/agent_daemon.sh` 抽取 `webhook.py`（`/opt/ip_sentinel` 下放临时证书与配置）真实运行，从 `master/tg_master.sh` 抽取 `canonical_query` / `generate_signed_url` / `call_agent` 等函数与代码块对其发请求；Telegram 接口用本地假服务替代（仅改测试副本中的 `api.telegram.org`）。覆盖：签名 20 项、OTA 9 项、配对握手 17 项、所有者锁定 14 项、换 Bot 凭证 Agent 17 项 / Master 13 项。**尚未在真实 VPS + 真实 Telegram 上跑过完整链路。**
+
+### 2.5 已知限制 / 未做
+
+- **官方公共网关模式**：节点保留 CHAT_ID 验签（官方司令部以 CHAT_ID 签名），fork 加固不生效；官方司令部签名格式与 v2 不同，其「开关」「改名」指令会被拒绝（可选：让公共模式 Agent 额外接受上游签名格式，该格式同样覆盖参数）。
+- **无证书指纹的旧节点**：Master 仍以 `--insecure` 连接（新注册节点已从首个请求起固定证书）。
+- **HMAC_SECRET 全局唯一**：所有者锁定后风险已收敛；如需进一步隔离可改为每节点独立密钥。
+- **供应链信任根是 GitHub 仓库本身**：哈希与提交锁定防传输篡改与版本混装，不防仓库被攻破（需发布签名方案）。
 
 ## 3. 任务看板
 
 | 任务 | 状态 |
 |------|:----:|
-| 初版审计（32 bugs） | ✅ 完成 |
-| 复审确认（5 worker 多角度审查） | ✅ 完成 |
-| Fork + 安全加固分支（原 hardened，已并入 main） | ✅ 完成 |
-| 全部 P0（5 项）修复 | ✅ 完成 |
-| 全部 P1（12 项）修复 | ✅ 完成 |
-| 升级路径分析与加固 | ✅ 完成 |
-| 一键备份升级脚本 upgrade.sh | ✅ 完成 |
-| 双角色（Master+Agent 同体）兼容 | ✅ 完成 |
-| README/CHANGELOG/UPGRADE_GUIDE 更新 | ✅ 完成 |
-| AGENTS.md 项目状态同步 | ✅ 完成 |
-| 上游变更同步 | ⏳ 按需 |
+| 第一轮审计与 P0/P1 修复（原 hardened 分支） | ✅ 完成 |
+| 第二轮复审：签名/OTA/证书/握手/所有者锁定 | ✅ 完成 |
+| 版本号方案 `-hardened.<n>` | ✅ 完成 |
+| 移植上游 #102 换 Bot 凭证 | ✅ 完成 |
+| README 公共网关数据流向说明 | ✅ 完成 |
+| 真机验证完整升级链路 | ⏳ 待做 |
+| 上游变更同步（上游 v4.3.3~4.3.5 的 UI 改动未移植） | ⏳ 按需 |
+| 公共网关模式签名兼容 | 💤 可选 |
 
 ## 4. 铁律
 
-1. **不改原始源码** — audit/repo/ 下的源码是只读副本
-2. **修复在 main 分支上操作** — 所有安全修复已合并到 main
+1. **不改原始源码** — `audit/repo/` 下的源码是只读副本（本地目录，不在仓库中）
+2. **修复在 main 分支上操作** — 开发分支测试通过后直接合并 main
 3. **每项修复独立 commit** — 方便上游 cherry-pick
 4. **不发布 exploit** — 报告只给行号、影响描述
+5. **每次发版必须升版本号** — 否则存量节点不会提示升级（见 §2.3）
+6. **存量节点必须能无缝升级** — 任何协议改动都要考虑新旧 Master/Agent 混跑
 
 ## 5. 路径约定
 
 | 内容 | 存放位置 |
 |------|----------|
-| 审计报告 | `audit/` |
+| 审计报告 | `audit/`（本地，已 gitignore） |
 | 代码仓库（单仓库） | 根目录（origin→aduhappy/ip-sentinel-fork） |
-| 上游跟踪 | `upstream` remote→hotyue/IP-Sentinel |
+| 上游跟踪 | `upstream` remote→hotyue/IP-Sentinel（需自行 `git remote add`） |
+| 升级说明 / 兼容矩阵 | `UPGRADE_GUIDE.md` §7.1 |
 
 ## 6. 环境
 
 - 远程 origin: https://github.com/aduhappy/ip-sentinel-fork
 - 上游 upstream: https://github.com/hotyue/IP-Sentinel
-- 本地: G:\ip-sentinel
+- 本地: G:\ip-sentinel（第二轮在 Claude Code 云端会话中完成）
 - 默认分支: `main`
