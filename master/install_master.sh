@@ -26,7 +26,7 @@ REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 # [核心架构升级] 动态嗅探云端真理之源 (SSOT)
 # ----------------------------------------------------------
 TARGET_VERSION=$( (curl -fsSL --connect-timeout 5 --retry 2 "${REPO_RAW_URL}/version.txt?t=$(date +%s)" || curl -4 -fsSL --connect-timeout 5 --retry 2 "${REPO_RAW_URL}/version.txt?t=$(date +%s)") 2>/dev/null | grep "^MASTER_VERSION=" | cut -d'=' -f2 | tr -d '[:space:]')
-TARGET_VERSION=${TARGET_VERSION:-"4.3.1"}
+TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.1"}
 
 echo -e "\n⏳ 正在拉取 IP-Sentinel Master v${TARGET_VERSION} 安装引擎..."
 
