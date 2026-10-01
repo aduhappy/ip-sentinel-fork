@@ -225,6 +225,137 @@ prepare_ota_package() {
     [ -n "$OTA_REF" ] && OTA_SUFFIX="${OTA_SUFFIX}&ref=${OTA_REF}"
 }
 
+# [双栈养护] 节点控制台的"养护 IP"按钮行（参数：节点名；读取当前会话 $CHAT_ID 的节点记录）
+ipmode_button_row() {
+    local fam label
+    fam=$(db_exec "SELECT IFNULL(maint_family, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$1' LIMIT 1;")
+    case "$fam" in
+        4) label="IPv4" ;;
+        6) label="IPv6" ;;
+        dual) label="双栈轮流" ;;
+        *) label="安装默认" ;;
+    esac
+    echo "[{\"text\":\"🌐 养护 IP: ${label}\",\"callback_data\":\"ipmode_menu:$1\"}]"
+}
+
+# 以 JSON 方式发送 Markdown 文本（内容含 % & 等字符时比表单编码的 send_msg 安全）
+send_json_text() {
+    local payload
+    payload=$(jq -cn --arg cid "$1" --arg txt "$2" '{chat_id: $cid, text: $txt, parse_mode: "Markdown", disable_web_page_preview: true}')
+    curl -s --connect-timeout 5 -m 10 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+        -H "Content-Type: application/json" -d "$payload" > /dev/null
+}
+
+# ==========================================================
+# [主控汇总] 并发拉取会话名下全部节点的 /report_data，合成一条全局简报（超长时自动分段）
+# 参数：chat_id 标题。调用方应以后台子 shell 运行，避免 wait 等待到无关的后台任务
+# ==========================================================
+send_fleet_summary() {
+    local chat="$1" title="$2" nodes tmpd idx=0 chunk
+    nodes=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, ''), IFNULL(node_alias, node_name), IFNULL(region, '') FROM nodes WHERE chat_id='$chat';")
+    if [ -z "$nodes" ]; then
+        send_msg "$chat" "⚠️ 您名下暂无节点。"
+        return
+    fi
+    tmpd=$(mktemp -d /tmp/ip_sentinel_summary.XXXXXX) || return
+    while IFS='|' read -r NNAME AIP APORT AFP NALIAS NREGION; do
+        [ -z "$NNAME" ] && continue
+        idx=$((idx + 1))
+        printf '%s|%s|%s\n' "$NNAME" "$NALIAS" "$NREGION" > "$tmpd/$idx.meta"
+        ( call_agent "$AIP" "$APORT" "/report_data" "" "$AFP" > "$tmpd/$idx.json" 2>/dev/null ) &
+        sleep 0.2
+    done <<< "$nodes"
+    wait
+    python3 - "$tmpd" "$title" <<'PY' | while IFS= read -r -d $'\x1e' chunk; do send_json_text "$chat" "$chunk"; sleep 1; done
+import sys, os, json, re, glob, datetime
+tmpd, title = sys.argv[1], sys.argv[2]
+
+def md(s):  # Markdown(v1) 纯文本转义
+    s = str(s).replace('`', '')
+    for ch in ('_', '*', '['):
+        s = s.replace(ch, '\\' + ch)
+    return s
+
+def code(s):  # 行内代码中不能出现反引号
+    return '`' + str(s).replace('`', '') + '`'
+
+def flag(cc):
+    cc = (cc or '').split('-')[0].upper()
+    cc = 'GB' if cc == 'UK' else cc
+    return ''.join(chr(0x1F1E6 + ord(c) - 65) for c in cc) if re.fullmatch(r'[A-Z]{2}', cc) else '🌐'
+
+def verdict(last):
+    if not last:
+        return 'none', '⏳ 暂无判定'
+    regs = dict(re.findall(r'(Jump|Prem|Music): ?([A-Z]{2})', last))
+    cc = regs.get('Prem') or regs.get('Music') or regs.get('Jump') or ''
+    if last.startswith('✅'):
+        return 'ok', ('✅ ' + cc).strip()
+    if last.startswith('❌'):
+        return 'cn', '❌ 送中'
+    if last.startswith('⚠️'):
+        return 'drift', '⚠️ 漂移' + ('→' + cc if cc else '')
+    if last.startswith('🚨'):
+        return 'probe', '🚨 探针失效'
+    return 'none', '❔ 未知'
+
+blocks = []  # (排序键, 文本)
+count = {'ok': 0, 'cn': 0, 'bad': 0}
+for meta_path in sorted(glob.glob(os.path.join(tmpd, '*.meta')), key=lambda p: int(os.path.basename(p).split('.')[0])):
+    idx = os.path.basename(meta_path).split('.')[0]
+    name, alias, region = (open(meta_path, encoding='utf-8').read().strip().split('|') + ['', '', ''])[:3]
+    try:
+        data = json.load(open(os.path.join(tmpd, idx + '.json'), encoding='utf-8'))
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        count['bad'] += 1
+        blocks.append((2, f"🔌 {code(alias or name)} 无响应（离线或版本过旧，可先 OTA 升级）"))
+        continue
+    lines = [f"{flag(data.get('region') or region)} {code(data.get('alias') or alias or name)} · v{md(data.get('version', '?'))}"]
+    kinds = []
+    for fam, st in sorted((data.get('families') or {}).items()):
+        g, t = st.get('google', {}), st.get('trust', {})
+        parts = []
+        if data.get('google_enabled', True):
+            kind, label = verdict(g.get('last', ''))
+            kinds.append(kind)
+            rate = f"{round(g.get('ok', 0) * 100 / g['total'])}%" if g.get('total') else '-'
+            parts.append(f"{label} · Google {g.get('total', 0)} 次 {rate}")
+        else:
+            parts.append('Google 已停')
+        if data.get('trust_enabled', True):
+            parts.append(f"信用 {t.get('total', 0)} 轮")
+        lines.append(f"   v{fam} {code(st.get('ip') or '未知')} " + ' · '.join(parts))
+    if 'cn' in kinds:
+        count['cn'] += 1; order = 0
+    elif kinds and all(k == 'ok' for k in kinds) or not kinds:
+        count['ok'] += 1; order = 3
+    else:
+        count['bad'] += 1; order = 1
+    blocks.append((order, '\n'.join(lines)))
+
+now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+total = sum(count.values())
+header = (f"📊 *IP-Sentinel 全局简报 · {md(title)}*\n🕒 {now}\n"
+          f"共 {total} 台 · ✅ 正常 {count['ok']} · ❌ 送中 {count['cn']} · ⚠️ 异常/无响应 {count['bad']}\n"
+          "（统计近 24 小时；判定取各地址族最近一次 Google 自检）")
+def tg_len(s):  # Telegram 按 UTF-16 码元计长（国旗 emoji 占 4），单条上限 4096
+    return len(s.encode('utf-16-le')) // 2
+
+chunks, cur = [], header
+for _, text in sorted(blocks, key=lambda b: b[0]):
+    if tg_len(cur) + tg_len(text) + 2 > 3800:
+        chunks.append(cur)
+        cur = '📊 *全局简报（续）*'
+    cur += '\n\n' + text
+chunks.append(cur)
+for c in chunks:
+    sys.stdout.write(c + '\x1e')
+PY
+    rm -rf "$tmpd"
+}
+
 # ==========================================================
 # 2. 数据库热升级自愈系统
 # ==========================================================
@@ -244,6 +375,8 @@ db_exec "ALTER TABLE nodes ADD COLUMN enable_google TEXT DEFAULT 'true';" 2>/dev
 db_exec "ALTER TABLE nodes ADD COLUMN enable_trust TEXT DEFAULT 'true';" 2>/dev/null
 db_exec "ALTER TABLE nodes ADD COLUMN enable_ota TEXT DEFAULT 'false';" 2>/dev/null
 db_exec "ALTER TABLE nodes ADD COLUMN agent_version TEXT DEFAULT '';" 2>/dev/null
+# [双栈养护] 节点养护地址族：'' 安装默认 / 4 / 6 / dual
+db_exec "ALTER TABLE nodes ADD COLUMN maint_family TEXT DEFAULT '';" 2>/dev/null
 
 # [数据自愈] 旧版注册解析把第 8 字段（版本号）并入 OTA 字段：版本号含字母（如 4.3.2-hardened.1）时会存成
 # 'truehardened' 等，节点从此被全舰队 OTA 的 enable_ota='true' 查询漏掉；启动时归一化
@@ -330,6 +463,18 @@ fi
 # 3. 核心长轮询调度器
 # ==========================================================
 while true; do
+    # [主控汇总] 每日 UTC 16:00（北京时间 0:00）向所有者推送一条全局汇总，每天一次；
+    # 节点定时战报（UTC 16:10）检测到司令部已拉取数据即跳过单独推送
+    if [ "$IS_OFFICIAL_GATEWAY" != "true" ] && [ "$(date -u +%H)" = "16" ]; then
+        SUMMARY_DAY=$(date -u +%F)
+        SUMMARY_STATE="${MASTER_DIR:-/opt/ip_sentinel_master}/.daily_summary"
+        if [ "$(cat "$SUMMARY_STATE" 2>/dev/null)" != "$SUMMARY_DAY" ]; then
+            echo "$SUMMARY_DAY" > "$SUMMARY_STATE"
+            SUMMARY_OWNER=$(grep "^OWNER_CHAT_ID=" "$CONF" | cut -d'"' -f2)
+            [[ "$SUMMARY_OWNER" =~ ^-?[0-9]{5,}$ ]] && ( send_fleet_summary "$SUMMARY_OWNER" "每日汇总" ) &
+        fi
+    fi
+
     OFFSET=$(cat $OFFSET_FILE)
     UPDATES=$(curl -s --connect-timeout 5 -m 35 "https://api.telegram.org/bot${TG_TOKEN}/getUpdates?offset=${OFFSET}&timeout=30")
     
@@ -813,11 +958,9 @@ except ValueError:
 	                    if [ -z "$NODE_DATA" ]; then
 	                        send_msg "$CHAT_ID" "⚠️ 您名下暂无在线节点。"
 	                    else
-	                        send_msg "$CHAT_ID" "📢 **司令部指令下达：正在召唤所有哨兵回传简报...**%0A*(为防止触发 TG 官方限流，简报将排队依次送达，请耐心等待)*"
-	                        echo "$NODE_DATA" | while IFS='|' read -r NNAME AIP APORT AFP; do
-	                            call_agent "$AIP" "$APORT" "/trigger_report" "" "$AFP" > /dev/null &
-	                            sleep 2  
-	                        done
+	                        # [主控汇总] 并发拉取各节点数据，合成一条全局简报（单机详细战报仍可在节点控制台单独生成）
+	                        send_msg "$CHAT_ID" "📢 **正在收集全舰队数据，稍后汇总为一条简报...**"
+	                        ( send_fleet_summary "$CHAT_ID" "即时简报" ) &
                     fi
                     ;;
 
@@ -982,13 +1125,62 @@ except ValueError:
                     # 变更 callback_data 由 del 变为 del_confirm
 BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"del_confirm:$TARGET_NODE\"}, {\"text\":\"⬅️ 返回战区列表\",\"callback_data\":\"list_nodes\"}]"
 
-                    BTNS="[$BTN_ACTION, $BTN_TOGGLE, $BTN_CONFIG, $BTN_DANGER]"
+                    BTNS="[$BTN_ACTION, $BTN_TOGGLE, $(ipmode_button_row "$TARGET_NODE"), $BTN_CONFIG, $BTN_DANGER]"
                     TEXT_MSG="⚙️ **目标锁定**: \`$TARGET_ALIAS\`\n(底层标识: \`$TARGET_NODE\`)\n🌐 IP 坐标: \`$A_IP\`\n🕒 最后通讯: \`$LAST_SEEN\`\n\n请下达精确控制指令："
 
                     if [ -n "$MSG_ID" ]; then
                         edit_ui "$CHAT_ID" "$MSG_ID" "$TEXT_MSG" "$BTNS"
                     else
                         send_ui "$CHAT_ID" "$TEXT_MSG" "$BTNS"
+                    fi
+                    ;;
+
+                ipmode_menu:*)
+                    TARGET_NODE=$(echo "${TEXT#*:}" | tr -cd 'a-zA-Z0-9_.-')
+                    BTNS="[[{\"text\":\"IPv4\",\"callback_data\":\"ipmode:$TARGET_NODE:4\"}, {\"text\":\"IPv6\",\"callback_data\":\"ipmode:$TARGET_NODE:6\"}, {\"text\":\"双栈轮流\",\"callback_data\":\"ipmode:$TARGET_NODE:dual\"}], [{\"text\":\"⬅️ 返回节点控制台\",\"callback_data\":\"manage:$TARGET_NODE\"}]]"
+                    TEXT_MSG="🌐 **选择养护的出口 IP**: \`$TARGET_NODE\`\n\n• IPv4 / IPv6：只养护该地址\n• 双栈轮流：每轮巡逻交替养护 v4 与 v6（总请求量不变）\n\nGoogle 对 v4 与 v6 分别定位：代理访问 Google 走哪个地址族，就要养护哪个。节点会自动探测出口，拒绝 WARP / 隧道等虚拟网卡。"
+                    if [ -n "$MSG_ID" ]; then
+                        edit_ui "$CHAT_ID" "$MSG_ID" "$TEXT_MSG" "$BTNS"
+                    else
+                        send_ui "$CHAT_ID" "$TEXT_MSG" "$BTNS"
+                    fi
+                    ;;
+
+                ipmode:*)
+                    IFS=':' read -r _ TARGET_NODE TARGET_MODE <<< "$TEXT"
+                    TARGET_NODE=$(echo "$TARGET_NODE" | tr -cd 'a-zA-Z0-9_.-')
+                    case "$TARGET_MODE" in
+                        4|6|dual) ;;
+                        *) send_msg "$CHAT_ID" "⛔ 无效的养护模式。"; continue ;;
+                    esac
+                    AGENT_INFO=$(db_exec "SELECT agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
+                    AGENT_IP=$(echo "$AGENT_INFO" | cut -d'|' -f1)
+                    AGENT_PORT=$(echo "$AGENT_INFO" | cut -d'|' -f2)
+                    AGENT_FP=$(echo "$AGENT_INFO" | cut -d'|' -f3)
+                    if [ -z "$AGENT_IP" ] || [ -z "$AGENT_PORT" ]; then
+                        send_msg "$CHAT_ID" "❌ 数据库中未找到该节点的通讯地址。"
+                        continue
+                    fi
+                    [ -n "$MSG_ID" ] && edit_msg "$CHAT_ID" "$MSG_ID" "⏳ 正在让 \`$TARGET_NODE\` 探测出口并切换养护模式..."
+                    RESPONSE=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/trigger_ipmode" "&mode=${TARGET_MODE}" "$AGENT_FP")
+                    # 回执会拼进 JSON 字符串，剔除引号、反斜杠、反引号
+                    RESP_CLEAN=$(printf '%s' "$RESPONSE" | head -n 1 | tr -d '"\\`')
+                    if [[ "$RESPONSE" == *"Action Accepted"* ]]; then
+                        db_exec "UPDATE nodes SET maint_family='$TARGET_MODE' WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE';"
+                        DETECTED=$(printf '%s' "${RESP_CLEAN#*; }" | sed 's/; /\\n/g')
+                        RESULT="✅ **养护模式已切换**: \`$TARGET_NODE\` → $( [ "$TARGET_MODE" = "dual" ] && echo "双栈轮流" || echo "IPv$TARGET_MODE" )\n\n探测到的出口:\n${DETECTED}\n\n下一轮巡逻起生效。"
+                    elif [[ "$RESPONSE" == *"400 Bad Request"* ]]; then
+                        RESULT="❌ **切换被节点拒绝**: ${RESP_CLEAN#400 Bad Request: }"
+                    elif [ "$RESPONSE" == "FAILED" ]; then
+                        RESULT="❌ 节点无响应：可能离线，或版本过旧不支持该功能（请先 OTA 升级）。"
+                    else
+                        RESULT="⚠️ 回执异常：\`${RESP_CLEAN:0:80}\`"
+                    fi
+                    BTNS="[[{\"text\":\"⬅️ 返回节点控制台\",\"callback_data\":\"manage:$TARGET_NODE\"}]]"
+                    if [ -n "$MSG_ID" ]; then
+                        edit_ui "$CHAT_ID" "$MSG_ID" "$RESULT" "$BTNS"
+                    else
+                        send_ui "$CHAT_ID" "$RESULT" "$BTNS"
                     fi
                     ;;
 
@@ -1042,7 +1234,7 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
                             fi
                             BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"del:$TARGET_NODE\"}, {\"text\":\"⬅️ 返回战区列表\",\"callback_data\":\"list_nodes\"}]"
 
-                            BTNS="[$BTN_ACTION, $BTN_TOGGLE, $BTN_CONFIG, $BTN_DANGER]"
+                            BTNS="[$BTN_ACTION, $BTN_TOGGLE, $(ipmode_button_row "$TARGET_NODE"), $BTN_CONFIG, $BTN_DANGER]"
                             TARGET_ALIAS=$(db_exec "SELECT IFNULL(node_alias, node_name) FROM nodes WHERE chat_id='$CHAT_ID' AND node_name='$TARGET_NODE' LIMIT 1;")
                             
                             TEXT_MSG="⚙️ **目标锁定**: \`$TARGET_ALIAS\`\n(底层标识: \`$TARGET_NODE\`)\n🌐 IP 坐标: \`$A_IP\`\n🕒 最后通讯: \`$LAST_SEEN\`\n\n✅ **执行成功**: 模块 [$MOD_NAME] 状态已切换为 $TARGET_STATE！"

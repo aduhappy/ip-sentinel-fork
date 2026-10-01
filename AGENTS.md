@@ -46,6 +46,8 @@
 | **私有中枢响应任意会话 → 陌生人注册节点即可骗取全局 HMAC_SECRET** → 所有者锁定 | P0 | `3bc5164f` | .3 |
 | 移植上游 #102 全舰队切换 Bot 凭证（按 fork 安全模型改造） | 功能 | `5121a8ab` | .4 |
 | README 如实说明加固范围、公共网关数据流向、对外连接 | 文档 | `8dfd9f93` | .4 |
+| 回执被拼接 FAILED 致 OTA 汇总虚增失败条目；`Request Expired` 时钟偏差提示 | P2 | `059938ae` | .5 |
+| 司令部选择养护 IP（v4 / v6 / 双栈轮流）+ 全舰队汇总简报（每日北京 0:00） | 功能 | 见 CHANGELOG | .6 |
 
 ### 2.3 关键机制速查（改代码前必读）
 
@@ -58,10 +60,13 @@
 - **Master 启动时 `$CHAT_ID` 为空**（`master.conf` 不含 CHAT_ID），启动阶段需要会话 ID 时必须从数据库按节点取。
 - **webhook.py 的 `do_GET`**：函数内任何 `import X` 都会让 X 成为整个函数的局部名。不要在其中写 `import urllib.xxx`（会遮蔽顶层 `urllib`，所有请求报错）；用到 `re` 的分支须自行 `import re`。
 - **升级保留文件**：`core/` 整体替换前迁移 `cert.pem`、`key.pem`、`.probe_hash`、`ip_probe.sh`（两条安装路径各一处）。
+- **养护地址族**：`config.conf` 的 `MAINT_FAMILY`（空 / `4` / `6` / `dual`）与 `PUBLIC_IP4`、`BIND_IP4`、`PUBLIC_IP6`、`BIND_IP6`，由 `/trigger_ipmode` 写入；**不改动**原单栈的 `PUBLIC_IP` / `BIND_IP` / `IP_PREF`（`tg_report.sh`、`mod_quality.sh` 仍使用它们）。`mod_google.sh` / `mod_trust.sh` 读取配置后就地覆盖这三个变量，dual 时各自用 `core/.family_google`、`core/.family_trust` 轮流。日志模块名 `Google4/6`、`Trust4/6`。
+- **汇总简报**：Agent `/report_data` 只读配置与近 24 小时日志（不发外部请求），并写 `core/.master_polled`；`tg_report.sh` 无 `--manual` 时若该文件 26 小时内更新过则跳过推送（`/trigger_report` 传 `--manual`）。节点定时战报为 UTC 16:10，司令部汇总为 UTC 16:00（`MASTER_DIR/.daily_summary` 记当日已发）。汇总消息按 UTF-16 码元计长分段（上限 3800）。
+- **司令部发送含 `%`、`&` 的文本**用 `send_json_text`（JSON），`send_msg` 是表单编码，`%0A` 才是换行，`&` 会截断。
 
 ### 2.4 测试方式
 
-仓库内暂无测试目录。第二轮所有改动均在本地沙箱验证：从 `core/agent_daemon.sh` 抽取 `webhook.py`（`/opt/ip_sentinel` 下放临时证书与配置）真实运行，从 `master/tg_master.sh` 抽取 `canonical_query` / `generate_signed_url` / `call_agent` 等函数与代码块对其发请求；Telegram 接口用本地假服务替代（仅改测试副本中的 `api.telegram.org`）。覆盖：签名 20 项、OTA 9 项、配对握手 17 项、所有者锁定 14 项、换 Bot 凭证 Agent 17 项 / Master 13 项。**尚未在真实 VPS + 真实 Telegram 上跑过完整链路。**
+仓库内暂无测试目录。第二轮所有改动均在本地沙箱验证：从 `core/agent_daemon.sh` 抽取 `webhook.py`（`/opt/ip_sentinel` 下放临时证书与配置）真实运行，从 `master/tg_master.sh` 抽取 `canonical_query` / `generate_signed_url` / `call_agent` 等函数与代码块对其发请求；Telegram 接口用本地假服务替代（仅改测试副本中的 `api.telegram.org`）。覆盖：签名 20 项、OTA 9 项、配对握手 17 项、所有者锁定 14 项、换 Bot 凭证 Agent 17 项 / Master 13 项；双栈与汇总：`/trigger_ipmode` 11 项（PATH 注入假 `ip`/`curl` 模拟 v6 正常 / WARP / 无路由）、`/report_data` 9 项（按真实日志格式构造）、模块地址族选择、`tg_report.sh` 去重与分族 6 项、Master 菜单与切换 12 项、控制台与每日触发 6 项、汇总分段（120 节点按 UTF-16 计长）与真实签名端到端拉取。**尚未在真实 VPS + 真实 Telegram 上跑过完整链路。**
 
 ### 2.5 已知限制 / 未做
 
@@ -79,6 +84,7 @@
 | 版本号方案 `-hardened.<n>` | ✅ 完成 |
 | 移植上游 #102 换 Bot 凭证 | ✅ 完成 |
 | README 公共网关数据流向说明 | ✅ 完成 |
+| 司令部选择养护 IP（双栈）+ 汇总简报 | ✅ 完成 |
 | 真机验证完整升级链路 | ⏳ 待做 |
 | 上游变更同步（上游 v4.3.3~4.3.5 的 UI 改动未移植） | ⏳ 按需 |
 | 公共网关模式签名兼容 | 💤 可选 |

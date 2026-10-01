@@ -19,6 +19,18 @@ if [ -z "$TG_TOKEN" ] || [ -z "$CHAT_ID" ]; then
 fi
 
 # ==========================================================
+# [主控汇总] 定时触发（无 --manual）时，若司令部 26 小时内拉取过汇总数据（/report_data），
+# 每日简报改由司令部合并为一条发送，本节点不再单独推送；司令部失联超过 26 小时则自动恢复单独推送
+# ==========================================================
+if [ "$1" != "--manual" ] && [ -f "${INSTALL_DIR}/core/.master_polled" ]; then
+    LAST_POLL=$(cat "${INSTALL_DIR}/core/.master_polled" 2>/dev/null)
+    if [[ "$LAST_POLL" =~ ^[0-9]+$ ]] && [ $(( $(date +%s) - LAST_POLL )) -lt 93600 ]; then
+        echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] [v${AGENT_VERSION:-未知}] [INFO ] [Report ] [SYSTEM] 📨 司令部已统一汇总每日简报，本节点跳过单独推送。" >> "${INSTALL_DIR}/logs/sentinel.log"
+        exit 0
+    fi
+fi
+
+# ==========================================================
 # [防线 1] 并发风暴熔断机制 (60s 冷却池)
 # ==========================================================
 LOCK_FILE="${INSTALL_DIR}/core/.report_lock"
@@ -163,6 +175,20 @@ else
 🎯 **[Google 区域纠偏]**
 🚀 执行总数: ${G_TOTAL} 次 (胜率: **${G_RATE}%**)
 ✅ 成功: ${G_SUCCESS} | ❌ 送中: ${G_FAILED} | ⚠️ 警告: ${G_WARN}"
+
+        # [双栈养护] 分地址族展示（日志模块名为 Google4 / Google6）
+        if [ "$MAINT_FAMILY" == "dual" ]; then
+            for FAM in 4 6; do
+                FAM_LOGS=$(echo "$GOOGLE_LOGS" | grep "\[Google${FAM}")
+                F_TOTAL=$(echo "$FAM_LOGS" | grep "\[START\]" -c)
+                F_OK=$(echo "$FAM_LOGS" | grep "✅" -c)
+                F_RATE="0.0"
+                [ "$F_TOTAL" -gt 0 ] && F_RATE=$(awk "BEGIN {printf \"%.1f\", ($F_OK/$F_TOTAL)*100}")
+                FAM_IP_VAR="PUBLIC_IP${FAM}"
+                MSG="$MSG
+   IPv${FAM} \`${!FAM_IP_VAR:-未知}\`: ${F_TOTAL} 次 (胜率 ${F_RATE}%)"
+            done
+        fi
     fi
 
     # 统计 Trust 净化阵列数据

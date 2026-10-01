@@ -142,6 +142,146 @@ if os.path.exists('/opt/ip_sentinel/config.conf'):
         PAIR_KEY = _cfg['PAIR_KEY']
     AUTH_TOKEN = _cfg.get('HMAC_SECRET', '') or PAIR_KEY or CHAT_ID
 
+CONFIG_PATH = '/opt/ip_sentinel/config.conf'
+LOG_PATH = '/opt/ip_sentinel/logs/sentinel.log'
+MASTER_POLLED_FILE = '/opt/ip_sentinel/core/.master_polled'
+
+def read_config():
+    """读取 config.conf 为 dict（同名键取首次出现，与 /setkey 的覆写语义一致）"""
+    cfg = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, 'r', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if '=' in line and not line.startswith('#'):
+                    k, v = line.split('=', 1)
+                    cfg.setdefault(k, v.strip('"\''))
+    return cfg
+
+def update_config(pairs):
+    """flock 独占锁下原子覆写/追加配置项；值须已通过白名单校验"""
+    import fcntl
+    with open(CONFIG_PATH, 'r+', encoding='utf-8', errors='ignore') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        lines = f.readlines()
+        for key, val in pairs:
+            prefix = f"{key}="
+            for i, line in enumerate(lines):
+                if line.startswith(prefix):
+                    lines[i] = f'{prefix}"{val}"\n'
+                    break
+            else:
+                lines.append(f'{prefix}"{val}"\n')
+        f.seek(0)
+        f.writelines(lines)
+        f.truncate()
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+def detect_egress(fam):
+    """探测指定地址族的公网出口：返回 (public_ip, bind_ip, error)。
+    拒绝经 WARP/隧道等虚拟网卡的出口（养护它们没有意义）；本机网卡上不存在该地址时（NAT）bind_ip 为空，交由内核路由。"""
+    import ipaddress
+    probe_target = '8.8.8.8' if fam == '4' else '2001:4860:4860::8888'
+    try:
+        route = subprocess.run(['ip', f'-{fam}', 'route', 'get', probe_target],
+                               capture_output=True, text=True, timeout=3).stdout
+    except Exception:
+        route = ''
+    if not route.strip():
+        return '', '', f'本机没有 IPv{fam} 默认路由'
+    m = re.search(r'\bdev (\S+)', route)
+    dev = m.group(1) if m else ''
+    if re.match(r'^(warp|wgcf|tun|tap|docker|br-|lo)', dev):
+        return '', '', f'IPv{fam} 出口经由虚拟网卡 {dev}（WARP/隧道），不予养护'
+    ip_str = ''
+    for url in ('https://api.ip.sb/ip', 'https://ifconfig.me'):
+        try:
+            out = subprocess.run(['curl', f'-{fam}', '-s', '-m', '4', url],
+                                 capture_output=True, text=True, timeout=6).stdout.strip()
+        except Exception:
+            out = ''
+        if out:
+            ip_str = out
+            break
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return '', '', f'IPv{fam} 公网出口探测失败'
+    if ip_obj.version != int(fam) or not ip_obj.is_global:
+        return '', '', f'IPv{fam} 出口 {ip_str} 不是公网地址'
+    try:
+        addrs = subprocess.run(['ip', f'-{fam}', 'addr', 'show'], capture_output=True, text=True, timeout=3).stdout
+    except Exception:
+        addrs = ''
+    bind_ip = ip_str if re.search(r'inet6? ' + re.escape(ip_str) + r'/', addrs) else ''
+    return ip_str, bind_ip, ''
+
+def build_report_data():
+    """汇总本节点近 24 小时养护数据（只读配置与日志，不发起外部请求，供司令部快速拉取）"""
+    import collections
+    import datetime
+    cfg = read_config()
+    mode = cfg.get('MAINT_FAMILY', '')
+    legacy_fam = cfg.get('IP_PREF', '4') if cfg.get('IP_PREF', '4') in ('4', '6') else '4'
+    if mode == 'dual':
+        fams = ['4', '6']
+    elif mode in ('4', '6'):
+        fams = [mode]
+    else:
+        fams = [legacy_fam]
+
+    def fam_ip(f):
+        if mode and cfg.get(f'PUBLIC_IP{f}'):
+            return cfg.get(f'PUBLIC_IP{f}')
+        return cfg.get('PUBLIC_IP', '').strip('[]') if f == legacy_fam else ''
+
+    stats = {f: {'ip': fam_ip(f),
+                 'google': {'total': 0, 'ok': 0, 'fail': 0, 'warn': 0, 'last': '', 'last_time': ''},
+                 'trust': {'total': 0, 'ok': 0, 'fail': 0}} for f in fams}
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+    line_re = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC\] \[v[^\]]*\] \[([^\]]*)\] \[(Google|Trust)\s*([46]?)\s*\]')
+    lines = collections.deque(maxlen=20000)
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, 'r', errors='ignore') as f:
+            for line in f:
+                lines.append(line)
+    for line in lines:
+        m = line_re.match(line)
+        if not m:
+            continue
+        try:
+            ts = datetime.datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        level, mod, fam = m.group(2).strip(), m.group(3), (m.group(4) or legacy_fam)
+        if fam not in stats:
+            continue
+        bucket = stats[fam]['google' if mod == 'Google' else 'trust']
+        if level == 'START':
+            bucket['total'] += 1
+        if '✅' in line:
+            bucket['ok'] += 1
+        if '❌' in line:
+            bucket['fail'] += 1
+        if mod == 'Google' and '⚠️' in line:
+            bucket['warn'] += 1
+        if mod == 'Google' and level == 'SCORE' and '自检结论: ' in line:
+            bucket['last'] = line.split('自检结论: ', 1)[1].strip()
+            bucket['last_time'] = m.group(1)
+    return {
+        'node': cfg.get('NODE_NAME', ''),
+        'alias': cfg.get('NODE_ALIAS', cfg.get('NODE_NAME', '')),
+        'region': cfg.get('REGION_CODE', ''),
+        'region_name': cfg.get('REGION_NAME', ''),
+        'version': cfg.get('AGENT_VERSION', ''),
+        'mode': mode or legacy_fam,
+        'google_enabled': cfg.get('ENABLE_GOOGLE', 'true') == 'true',
+        'trust_enabled': cfg.get('ENABLE_TRUST', 'true') == 'true',
+        'families': stats,
+    }
+
 def cert_pubkey_pin():
     """本机 TLS 公钥 (DER) 的 SHA256 base64，与 /cert_fp 及 Master --pinnedpubkey 同格式；失败返回空串"""
     cert_path = '/opt/ip_sentinel/core/cert.pem'
@@ -302,8 +442,62 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-type", "text/plain")
             self.end_headers()
             self.wfile.write(b"Action Accepted: tg_report\n")
-            subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/tg_report.sh"],
+            # --manual：手动触发的单机战报不受"司令部已统一汇总"的定时抑制
+            subprocess.Popen(["nohup", "bash", "/opt/ip_sentinel/core/tg_report.sh", "--manual"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+
+        # 路由 3.5: 司令部汇总数据拉取（只读配置与日志，快速返回 JSON；记录拉取时间供定时战报去重）
+        elif req_path == '/report_data':
+            try:
+                import json
+                body = json.dumps(build_report_data(), ensure_ascii=False).encode('utf-8')
+                try:
+                    with open(MASTER_POLLED_FILE, 'w') as f:
+                        f.write(str(int(time.time())))
+                except Exception:
+                    pass
+                self.send_response(200)
+                self.send_header("Content-type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"500 Internal Error: {str(e)}\n".encode('utf-8'))
+            return
+
+        # 路由 3.6: 养护地址族切换（4 / 6 / dual），由司令部下发
+        elif req_path == '/trigger_ipmode':
+            mode = query.get('mode', [''])[0]
+            if mode not in ('4', '6', 'dual'):
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"400 Bad Request: Invalid mode\n")
+                return
+            try:
+                fams = ['4', '6'] if mode == 'dual' else [mode]
+                pairs = [('MAINT_FAMILY', mode)]
+                found = []
+                for fam in fams:
+                    pub, bind, err = detect_egress(fam)
+                    if err:
+                        self.send_response(400)
+                        self.end_headers()
+                        self.wfile.write(f"400 Bad Request: {err}\n".encode('utf-8'))
+                        return
+                    pairs += [(f'PUBLIC_IP{fam}', pub), (f'BIND_IP{fam}', bind)]
+                    found.append(f"v{fam}={pub}")
+                update_config(pairs)
+                self.send_response(200)
+                self.send_header("Content-type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(f"Action Accepted: ipmode={mode}; {'; '.join(found)}\n".encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"500 Internal Error: {str(e)}\n".encode('utf-8'))
+            return
 
         # 路由 4: 获取并回传实时日志切片
         elif req_path == '/trigger_log':

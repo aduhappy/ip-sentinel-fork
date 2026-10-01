@@ -1031,7 +1031,7 @@ EOF
 [Unit]
 Description=Timer for IP-Sentinel Telegram Report Service
 [Timer]
-OnCalendar=*-*-* 16:00:00 UTC
+OnCalendar=*-*-* 16:10:00 UTC
 Unit=ip-sentinel-report.service
 [Install]
 WantedBy=timers.target
@@ -1125,7 +1125,7 @@ while true; do
     if [ "\$HOUR" == "${DEPLOY_UTC_HOUR}" ] && [ "\$MIN" == "${DEPLOY_UTC_MIN}" ]; then
         /bin/bash /opt/ip_sentinel/core/updater.sh >/dev/null 2>&1
     fi
-    if [ "\$HOUR" == "16" ] && [ "\$MIN" == "00" ]; then
+    if [ "\$HOUR" == "16" ] && [ "\$MIN" == "10" ]; then
         /bin/bash /opt/ip_sentinel/core/tg_report.sh >/dev/null 2>&1
     fi
     if ! pgrep -f 'webhook.py' >/dev/null; then

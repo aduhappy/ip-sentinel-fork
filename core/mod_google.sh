@@ -16,6 +16,23 @@ else
     exit 1
 fi
 
+# [双栈养护] 按司令部下发的 MAINT_FAMILY 选择本轮出网地址族：4 / 6 固定，dual 轮流（本模块独立记录上一轮）；
+# 未设置时沿用安装时的单栈配置（PUBLIC_IP / BIND_IP / IP_PREF）
+FAMILY_STATE="${INSTALL_DIR:-/opt/ip_sentinel}/core/.family_google"
+case "${MAINT_FAMILY:-}" in
+    4|6) RUN_FAMILY="$MAINT_FAMILY" ;;
+    dual) [ "$(cat "$FAMILY_STATE" 2>/dev/null)" = "4" ] && RUN_FAMILY=6 || RUN_FAMILY=4
+          echo "$RUN_FAMILY" > "$FAMILY_STATE" 2>/dev/null ;;
+    *) RUN_FAMILY="" ;;
+esac
+if [ "$RUN_FAMILY" = "4" ] && [ -n "$PUBLIC_IP4" ]; then
+    PUBLIC_IP="$PUBLIC_IP4"; BIND_IP="$BIND_IP4"; IP_PREF="4"
+elif [ "$RUN_FAMILY" = "6" ] && [ -n "$PUBLIC_IP6" ]; then
+    PUBLIC_IP="$PUBLIC_IP6"; BIND_IP="$BIND_IP6"; IP_PREF="6"
+fi
+# 日志模块名携带地址族（Google4 / Google6），供战报与司令部汇总分族统计
+MODULE_NAME="Google${IP_PREF:-4}"
+
 # [容灾机制] 若宿主环境未注入日志函数，则启动 Fallback 接管
 if ! type log >/dev/null 2>&1; then
     log() {
