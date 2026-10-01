@@ -21,7 +21,7 @@ do_master_env_precheck() {
 }
 
 do_fetch_master_version() {
-    TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.1"}
+    TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.2"}
 
     MASTER_DIR="/opt/ip_sentinel_master"
     DB_FILE="${MASTER_DIR}/sentinel.db"

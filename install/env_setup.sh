@@ -55,7 +55,7 @@ do_env_precheck() {
 
 do_fetch_version() {
     # 已由外壳入口拉取并 export TARGET_VERSION，此处只需保障兜底容错
-    TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.1"}
+    TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.2"}
 }
 
 do_install_deps() {
