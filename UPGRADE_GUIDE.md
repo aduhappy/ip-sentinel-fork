@@ -514,7 +514,7 @@ grep -rn "$FORK_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/null
 1. **Agent 安装时生成 `PAIR_KEY`**（仅私有中枢模式），连同本机 TLS 公钥指纹作为注册暗号的第 9、10 字段：
    `#REGISTER#|地区|节点|IP|端口|别名|OTA|版本|PAIR_KEY|证书指纹`
 2. **注册暗号只经过你自己的 Telegram 会话**到达 Master，Master 据此：以 `PAIR_KEY` 签名（不再用 `CHAT_ID`）、直接固定暗号中的证书指纹（不再 `--insecure` 盲取），然后下发 `HMAC_SECRET`。
-3. Agent 对 `/setkey` 始终接受 `PAIR_KEY` 签名 —— **Master 重装后，在节点上执行 `bash /opt/ip_sentinel/core/install.sh` 选 3 重发注册暗号并转发即可重新配对**，无需重装 Agent。
+3. Agent 对 `/setkey` 始终接受 `PAIR_KEY` 签名 —— **Master 重装后，在节点上重新运行一键安装命令（`bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main/install.sh)"`），菜单选 3「重新发送注册指令」，把暗号转发给机器人即可重新配对**，无需重装 Agent。
 
 Master 回复的入库确认会显示握手方式：`🔐 安全握手：配对密钥 + 证书固定`，或 `⚠️ 旧版注册格式（CHAT_ID 握手）`。
 
