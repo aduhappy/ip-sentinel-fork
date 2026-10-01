@@ -63,6 +63,8 @@
 - **养护地址族**：`config.conf` 的 `MAINT_FAMILY`（空 / `4` / `6` / `dual`）与 `PUBLIC_IP4`、`BIND_IP4`、`PUBLIC_IP6`、`BIND_IP6`，由 `/trigger_ipmode` 写入；**不改动**原单栈的 `PUBLIC_IP` / `BIND_IP` / `IP_PREF`（`tg_report.sh`、`mod_quality.sh` 仍使用它们）。`mod_google.sh` / `mod_trust.sh` 读取配置后就地覆盖这三个变量，dual 时各自用 `core/.family_google`、`core/.family_trust` 轮流。日志模块名 `Google4/6`、`Trust4/6`。
 - **汇总简报**：Agent `/report_data` 只读配置与近 24 小时日志（不发外部请求），并写 `core/.master_polled`；`tg_report.sh` 无 `--manual` 时若该文件 26 小时内更新过则跳过推送（`/trigger_report` 传 `--manual`）。节点定时战报为 UTC 16:10，司令部汇总为 UTC 16:00（`MASTER_DIR/.daily_summary` 记当日已发）。汇总消息按 UTF-16 码元计长分段（上限 3800）。
 - **司令部发送含 `%`、`&` 的文本**用 `send_json_text`（JSON），`send_msg` 是表单编码，`%0A` 才是换行，`&` 会截断。
+- **OTA 必须逃出守护服务 cgroup**：安装程序会 `systemctl kill` 守护服务，同 cgroup 的升级进程会被连带杀掉。Agent 用 `systemd-run` 拉起升级脚本；`core/install.sh` 在 `SILENT_OTA` 下检测 `/proc/self/cgroup`，仍在守护服务内则复制自身经 `systemd-run` 转移（`OTA_ESCAPED=1` 防重入）。**不要**把 OTA 启动方式改回普通子进程。
+- **"OTA 受理成功"≠ 升级完成**：只表示节点接受了指令；以节点发回的「引擎热更新完成」为准。
 
 ### 2.4 测试方式
 

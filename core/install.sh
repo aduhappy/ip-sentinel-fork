@@ -67,6 +67,20 @@ REPO_RAW_URL="https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main"
 if [[ "${OTA_PINNED_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [[ "$REPO_RAW_URL" =~ ^(https://raw\.githubusercontent\.com/[^/]+/[^/]+)/[^/]+$ ]]; then
     REPO_RAW_URL="${BASH_REMATCH[1]}/${OTA_PINNED_REF}"
 fi
+
+# [OTA 自救] 由 Agent 守护进程拉起的 OTA 会落在 ip-sentinel-agent-daemon.service 的 cgroup 内：
+# 下文 "systemctl kill" 旧守护进程时会连同本安装进程一并杀掉，升级静默中断，旧版随即被 systemd 自动拉起。
+# 检测到该情况时复制自身并经 systemd-run 在独立临时单元中重新执行（兼容尚未修复启动方式的旧版 Agent），
+# systemd-run 不可用或失败时按原流程继续
+if [ "${SILENT_OTA:-}" == "true" ] && [ -z "${OTA_ESCAPED:-}" ] && command -v systemd-run >/dev/null 2>&1 \
+   && grep -q "ip-sentinel-agent-daemon" "${OTA_CGROUP_FILE:-/proc/self/cgroup}" 2>/dev/null; then
+    OTA_SELF_COPY=$(mktemp /tmp/ip_sentinel_ota_XXXXXX.sh 2>/dev/null) && cp -- "$0" "$OTA_SELF_COPY" 2>/dev/null \
+    && systemd-run --quiet --setenv=SILENT_OTA=true --setenv=OTA_ESCAPED=1 --setenv="OTA_PINNED_REF=${OTA_PINNED_REF:-}" \
+        /bin/bash -c 'exec /bin/bash "$1" >> /opt/ip_sentinel/logs/ota_upgrade.log 2>&1' _ "$OTA_SELF_COPY" >/dev/null 2>&1 \
+    && { echo "↪️ 已转入独立 systemd 单元继续 OTA 升级（避免随旧守护进程一并被终止）"; exit 0; }
+    rm -f -- "${OTA_SELF_COPY:-}" 2>/dev/null
+    echo "⚠️ systemd-run 转移失败，按原流程继续"
+fi
 INSTALL_DIR="/opt/ip_sentinel"
 CONFIG_FILE="${INSTALL_DIR}/config.conf"
 

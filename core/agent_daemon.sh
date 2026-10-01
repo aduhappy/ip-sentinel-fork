@@ -96,6 +96,7 @@ import sys
 import os
 import html
 import re
+import shutil
 import urllib.parse
 import urllib.request
 import hmac
@@ -880,8 +881,20 @@ rm -f -- "$0"
                         f.flush()
                         os_mod.chmod(f.name, 0o700)
                         script_path = f.name
-                    subprocess.Popen(["nohup", "bash", script_path],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+                    # [防线/容灾] 经 systemd-run 在独立临时单元中执行，逃出本守护进程的 cgroup：
+                    # 安装程序会 "systemctl kill" 守护服务，留在同一 cgroup 的升级进程会被一并杀掉（上游即以此修复假死）。
+                    # 无 systemd 或启动失败时退回独立会话的子进程（非 systemd 环境不存在 cgroup 连坐）
+                    launched = False
+                    if shutil.which("systemd-run"):
+                        try:
+                            launched = subprocess.run(["systemd-run", "--quiet", "/bin/bash", script_path],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                timeout=15).returncode == 0
+                        except Exception:
+                            launched = False
+                    if not launched:
+                        subprocess.Popen(["nohup", "bash", script_path], start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
                 except Exception as e:
                     print(f"OTA script execution failed: {e}")
                 

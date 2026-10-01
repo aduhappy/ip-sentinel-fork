@@ -1,5 +1,12 @@
 # Changelog
 
+## [v4.3.2-hardened.7] - 2026-10-01
+
+### 🐛 Bug Fixes
+- **OTA 在 systemd 节点上从未真正完成（升级进程被连带杀掉）** — 第一轮加固把 `os.system` 换成 `subprocess` 时，顺带去掉了上游 OTA 的 `systemd-run` 逃逸，升级进程留在 `ip-sentinel-agent-daemon.service` 的 cgroup 内；安装程序执行 `systemctl kill` 旧守护进程时把自己一并杀掉，systemd 随即按 `Restart=always` 拉起旧版。表现为 OTA 显示"受理成功"但收不到「引擎热更新完成」、版本不变（定时器在被杀之前尚未停止，节点养护不受影响）。修复：
+  - Agent 改回经 `systemd-run` 在独立临时单元中执行升级脚本（无 systemd 时退回独立会话子进程）
+  - `core/install.sh` 在 OTA 模式下检测自身是否处于守护服务 cgroup，是则复制自身经 `systemd-run` 转移后继续——**旧版 Agent 下载到新安装脚本后即可自救，存量节点重新执行一次全舰队 OTA 即可，无需 SSH**
+
 ## [v4.3.2-hardened.6] - 2026-10-01
 
 ### ✨ 新功能
