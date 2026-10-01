@@ -1,5 +1,12 @@
 # Changelog
 
+## [v4.3.2-hardened.5] - 2026-10-01
+
+### 🐛 Bug Fixes
+- **全舰队 OTA 汇总出现空白失败条目、失败数虚高** — Agent 响应无 `Content-Length` 且不发 TLS close_notify，部分 curl/OpenSSL 组合读完正文仍以非零码退出，`call_agent` 的 `|| echo FAILED` 把 `FAILED` 拼到正文后形成两行回执，汇总时第二行被计为一个无名失败节点。现仅在无响应体时判定 FAILED，汇总回执压成单行
+- **汇总消息显示字面 `\n`** — 改用 `%0A` 换行
+- **`Request Expired` 无提示** — 汇总与单节点 OTA 回执明确提示节点与司令部时钟相差超过 60 秒，需开启 NTP
+
 ## [v4.3.2-hardened.4] - 2026-10-01
 
 ### ✨ 新功能

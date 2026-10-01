@@ -161,10 +161,14 @@ call_agent() {
 
                     # [P1-002] 证书指纹验证：优先使用 pinnedpubkey，回退至 --insecure 确保向后兼容
                     if [ -n "$cert_fingerprint" ]; then
-                        res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url" || echo "FAILED")
+                        res=$(curl -ks --connect-timeout 4 -m 12 --pinnedpubkey "sha256//$cert_fingerprint" "$url")
                     else
-                        res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url" || echo "FAILED")
+                        res=$(curl --insecure -s --connect-timeout 4 -m 12 "$url")
                     fi
+                    # 只在拿不到任何响应体时判定 FAILED。Agent 响应不带 Content-Length、关闭连接时也不发 TLS close_notify，
+                    # 部分 curl/OpenSSL 组合读完正文仍以非零码退出；旧写法 "|| echo FAILED" 会把 FAILED 拼到正文后面，
+                    # 形成两行回执（全舰队 OTA 汇总因此多出空白失败条目）
+                    [ -z "$res" ] && res="FAILED"
 
                     # 仅匹配 Agent 验签拒绝的完整前缀，避免证书指纹等正常响应中偶含 "401" 被误判
                     if [ "$res" == "FAILED" ] || [[ "$res" != *"401 Unauthorized"* ]]; then
@@ -728,7 +732,8 @@ except ValueError:
 		                              if [[ "$RESP" == *"Action Accepted"* ]]; then
 		                                  echo "OK|$NNAME" >> "$OTA_RPT"
 		                              else
-		                                  echo "FAIL|$NNAME|$RESP" >> "$OTA_RPT"
+		                                  # 回执压成单行并剔除分隔符/Markdown/表单敏感字符，避免汇总时被拆成多条
+		                                  echo "FAIL|$NNAME|$(printf '%s' "$RESP" | tr '\n\r|`&' '     ' | tr -s ' ' | cut -c 1-80)" >> "$OTA_RPT"
 		                              fi ) &
 		                            sleep 0.3
 		                        done <<< "$NODE_DATA"
@@ -740,13 +745,15 @@ except ValueError:
 		                                OTA_OK_N=$((OTA_OK_N + 1))
 		                            else
 		                                OTA_FAIL_N=$((OTA_FAIL_N + 1))
-		                                OTA_FAIL_LIST="${OTA_FAIL_LIST}\n- \`${NN}\` (${RESP})"
+		                                OTA_FAIL_LIST="${OTA_FAIL_LIST}%0A- \`${NN}\` (${RESP})"
 		                            fi
 		                        done < "$OTA_RPT"
 		                        rm -f "$OTA_RPT"
 		                        OTA_SUMMARY="📡 **全网 OTA 结果回执汇总**：成功 \`${OTA_OK_N}\` 台，失败 \`${OTA_FAIL_N}\` 台"
 		                        if [ "$OTA_FAIL_N" -gt 0 ]; then
-		                            send_msg "$CHAT_ID" "${OTA_SUMMARY}%0A❌ 失败节点:${OTA_FAIL_LIST}"
+		                            OTA_HINT=""
+		                            [[ "$OTA_FAIL_LIST" == *"Request Expired"* ]] && OTA_HINT="%0A%0A⏱️ \`Request Expired\` 表示节点与司令部时钟相差超过 60 秒，请在两端开启 NTP 时间同步后重试。"
+		                            send_msg "$CHAT_ID" "${OTA_SUMMARY}%0A❌ 失败节点:${OTA_FAIL_LIST}${OTA_HINT}"
 		                        else
 		                            send_msg "$CHAT_ID" "${OTA_SUMMARY}%0A🎉 全舰队 OTA 已全部受理成功！"
 		                        fi
@@ -1179,6 +1186,8 @@ BTN_DANGER="[{\"text\":\"🗑️ 从中枢销毁该档案\",\"callback_data\":\"
 	                            TEXT_RES="✅ OTA 触发成功！节点正在后台执行拉取重构..."
 	                        elif [[ "$RESPONSE" == *"400"* ]] || [[ "$RESPONSE" == *"Invalid sha256"* ]]; then
 	                            TEXT_RES="❌ OTA 指令被拒绝：哈希格式无效或完整性校验失败"
+	                        elif [[ "$RESPONSE" == *"Request Expired"* ]]; then
+	                            TEXT_RES="❌ 节点与司令部时钟相差超过 60 秒，指令被视为过期。请在两端开启 NTP 时间同步后重试。"
 	                        elif [ "$RESPONSE" == "FAILED" ]; then
 	                            TEXT_RES="❌ OTA 指令下发失败（节点不可达）"
 	                        elif [[ "$RESPONSE" == *"403"* ]]; then
