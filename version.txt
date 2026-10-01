@@ -1,2 +1,2 @@
-MASTER_VERSION=4.3.2-hardened.2
-AGENT_VERSION=4.3.2-hardened.2
+MASTER_VERSION=4.3.2-hardened.3
+AGENT_VERSION=4.3.2-hardened.3
