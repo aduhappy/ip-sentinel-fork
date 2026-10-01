@@ -26,8 +26,13 @@
 **—— 💎 骨干基建特征 ——**
 - 🏭 **全自动云端军工厂 (CI/CD Data Factory)**：依托 GitHub Actions 构建双轨无人值守流水线。**每月 1 日**批量锻造 4000+ 带有绝对物理分区的原生终端指纹库；**每日凌晨 (UTC)** 实时抓取全球各战区 Google 真实热搜榜单与本土骨干新闻 RSS。为前线舰队源源不断地输送最鲜活的伪装弹药。
 - 🔒 **叹息之墙 (Zero-Trust HMAC)**：底层通讯引入 时间戳 + HMAC-SHA256 军用级动态签名。指令有效期仅 60 秒（阅后即焚），未授权请求直接触发系统级 403 物理熔断，彻底免疫中间人抓包与重放攻击。
-- 🔒 **零信任安全体系 (Zero-Trust Security)**：全栈 13 项安全加固。SSRF 保护采用 Python `ipaddress` 库精准验证；HMAC-SHA256 军用级动态签名 + Nonce 防重放 + Nonce 缓存线程锁；全量命令注入防护（`os.system`→`subprocess`）；OTA 双端 SHA256 完整性校验与升级失败自动回退；证书固定验证移除 `--insecure`；探针脚本哈希锁定；Bash word splitting 数组化防御。
-- ☁️ **云端中枢 (Public Master)**：官方公共机器人 [@OmniBeacon_bot](https://t.me/OmniBeacon_bot) ，新手免自建，一键接入极速入伍！同时支持硬核极客私有化 SQLite 分布式部署。
+- 🔒 **零信任安全体系 (Zero-Trust Security，本 fork 加固，适用于私有中枢模式)**：
+  - **指令鉴权**：HMAC-SHA256 签名覆盖路径 + 全部查询参数（v2）+ 60 秒时效 + Nonce 防重放；司令部独立随机密钥 `HMAC_SECRET`，不再使用公开的 Chat ID
+  - **首次握手**：Agent 安装时生成配对密钥，与 TLS 证书指纹一起经你自己的 Telegram 会话交给司令部，从第一个请求起即固定证书（`--pinnedpubkey`）；仅未升级的旧节点仍走 Chat ID 握手兼容
+  - **访问控制**：私有司令部只响应所有者账号，杜绝陌生人注册节点骗取全局密钥
+  - **OTA 供应链**：升级包 SHA256 必填 + 锁定到提交 SHA 下载；全部核心模块非空与语法自检；失败自动回退旧版；升级保留 TLS 证书与探针哈希锁
+  - **注入防护**：SSRF 采用 Python `ipaddress` 精准验证；`os.system` 全量替换为 `subprocess` 列表参数；SQL 白名单校验；Bash 参数数组化
+- ☁️ **云端中枢 (Public Master)**：官方公共机器人 [@OmniBeacon_bot](https://t.me/OmniBeacon_bot) ，新手免自建，一键接入极速入伍！同时支持硬核极客私有化 SQLite 分布式部署。⚠️ 官方中枢由上游作者运营，不适用本 fork 的上述加固，详见下文「模式 B」说明。
 
 ## 📂 项目架构 (Modular Monorepo)
 
@@ -76,6 +81,14 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/aduhappy/ip-sentinel-for
 适合不想折腾、只想快速体验养护效果的新兵。
 
 > ☢️ **核按钮系统已阉割**：采用官方BOT，您将失去 **OTA 远程静默升级** 权限！所有私有前线节点只能通过SSH登录进行更新换代！
+
+> ⚠️ **数据流向与信任说明（本 fork 补充）**：官方机器人 [@OmniBeacon_bot](https://t.me/OmniBeacon_bot) 及其网关 `omni-gateway.samanthaestime296.workers.dev`（Cloudflare Worker）由**上游项目作者**运营，不受本 fork 控制。选择本模式即表示：
+> - 节点发往 Telegram 的全部消息（注册暗号中的节点 IP / 端口 / 地区、你的 Chat ID、巡逻战报、IP 质量报告、日志切片）都会经过上游作者的网关与司令部。
+> - 上游的官方司令部可以向你的节点下发巡逻、战报、日志等指令（OTA 在此模式下被强制禁用）。
+> - 官方司令部以 Chat ID 作为签名密钥，因此本模式节点**保留 Chat ID 验签**，本 fork 的配对密钥、所有者锁定、全参数签名等加固在此模式下**不生效**；Chat ID 是公开信息，知道它和节点 IP/端口的人也能向节点下发上述指令。
+> - 官方司令部的签名格式与本 fork 不同，其「模块开关」「改名」指令会被本 fork 节点拒绝。
+>
+> 如果你看重隐私与安全，请使用**模式 A（私有独立模式）**。
 
 - 关注机器人：在 TG 中关注官方安全网关 [@OmniBeacon_bot](https://t.me/OmniBeacon_bot) 并发送 /start。
 
@@ -142,6 +155,19 @@ bash <(curl -sL https://raw.githubusercontent.com/aduhappy/ip-sentinel-fork/main
 1. 在 `data/regions/国家代码/省州代码/` 目录下新增对应城市的配置 `.json`。
 2. 在 `data/keywords/` 目录下新增或完善配套国家的词库 `kw_XX.txt`。
 3. **最重要的一步：** 在 `data/map.json` 中登记你的国家、省州与城市信息。安装脚本将自动读取地图，在全球雷达中点亮你的节点！
+
+## 📡 对外连接一览
+
+除养护行为本身访问的 Google 等站点，以及 IP 质量探针运行时查询的 Scamalytics 等 IP 数据库外，本项目会主动连接以下服务：
+
+| 目标 | 用途 | 模式 |
+|:---|:---|:---|
+| `api.telegram.org` | 战报 / 注册暗号 / 司令部轮询 | 私有中枢 |
+| `omni-gateway.samanthaestime296.workers.dev` | 官方网关转发（上游作者运营） | 仅官方公共模式 |
+| `ip-sentinel-count.samanthaestime296.workers.dev` | 首次安装完成时的装机计数（Agent 与司令部各一次，升级不触发）。请求不带参数，但对方服务器必然能看到来源 IP，是否记录取决于上游作者 | 全部 |
+| `raw.githubusercontent.com/aduhappy/ip-sentinel-fork` | 安装、OTA、每日数据更新 | 全部 |
+| `api.github.com` | OTA 前解析分支最新提交 | 私有中枢 |
+| `raw.githubusercontent.com/xykt/IPQuality`、`IP.Check.Place` | IP 质量探针脚本（哈希锁定） | 全部 |
 
 ## ⚠️ 免责声明
 
