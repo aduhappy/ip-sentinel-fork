@@ -165,8 +165,11 @@ do_write_config() {
         LANG_PARAMS=$(jq -r '.google_module.lang_params' "$REGION_JSON_FILE")
 	VALID_URL_SUFFIX=$(jq -r '.google_module.valid_url_suffix' "$REGION_JSON_FILE")
 
-	# [HMAC 密钥同步] Agent 不再独立生成 HMAC 签名密钥，留空等待 Master 注册时通过 /setkey 下发（无密钥时回退 CHAT_ID 验签兼容）
+	# [HMAC 密钥同步] Agent 不再独立生成 HMAC 签名密钥，留空等待 Master 注册时通过 /setkey 下发
 	HMAC_SECRET="${HMAC_SECRET:-}"
+	# [配对引导] 生成配对密钥（仅私有中枢模式）：随注册暗号经用户 Telegram 会话交给 Master，替代公开的 CHAT_ID 完成首次握手
+	PAIR_KEY=""
+	[ "$TG_TOKEN" != "OFFICIAL_GATEWAY_MODE" ] && PAIR_KEY=$(openssl rand -hex 32)
 
 	cat > "$CONFIG_FILE" << EOF
 # IP-Sentinel 本地固化配置 (生成时间: $(date '+%Y-%m-%d %H:%M:%S'))
@@ -186,6 +189,7 @@ TG_TOKEN="$TG_TOKEN"
 TG_API_URL="$TG_API_URL"
 CHAT_ID="$CHAT_ID"
 HMAC_SECRET="$HMAC_SECRET"
+PAIR_KEY="$PAIR_KEY"
 AGENT_PORT="$AGENT_PORT"
 INSTALL_DIR="$INSTALL_DIR"
 LOG_FILE="${INSTALL_DIR}/logs/sentinel.log"
@@ -298,6 +302,19 @@ do_smooth_migrate() {
             ENABLE_OTA="false"
         else
             ENABLE_OTA=$(grep "^ENABLE_OTA=" "$CONFIG_FILE" | cut -d'"' -f2)
+        fi
+
+        # [配对引导] 存量节点补发配对密钥：仅限已完成密钥下发（HMAC_SECRET 非空）的私有中枢节点，其验签身份不变。
+        # 仍处 CHAT_ID 验签态的旧节点暂不生成，否则验签密钥会切换为 PAIR_KEY 而与 Master 失联；
+        # 这类节点由新版 Master 启动时的密钥收敛下发 HMAC_SECRET 后，下次升级再补。
+        HMAC_SECRET=$(grep "^HMAC_SECRET=" "$CONFIG_FILE" | cut -d'"' -f2)
+        if grep -q "^PAIR_KEY=" "$CONFIG_FILE"; then
+            PAIR_KEY=$(grep "^PAIR_KEY=" "$CONFIG_FILE" | cut -d'"' -f2)
+        elif [ -n "$HMAC_SECRET" ] && [ "$TG_TOKEN" != "OFFICIAL_GATEWAY_MODE" ]; then
+            PAIR_KEY=$(openssl rand -hex 32)
+            echo "PAIR_KEY=\"$PAIR_KEY\"" >> "$CONFIG_FILE"
+        else
+            PAIR_KEY=""
         fi
     fi
 }

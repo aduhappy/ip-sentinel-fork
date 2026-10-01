@@ -505,8 +505,28 @@ grep -rn "$FORK_URL" /opt/ip_sentinel/core/ /opt/ip_sentinel_master/ 2>/dev/null
 
 **这意味着**:
 - Master/Agent 可以混合升级，不会出现通讯中断。
-- 建议在 **所有节点升级完成后**，通过重新安装（选择「保留原配置」）为每个节点生成独立的 `HMAC_SECRET`。
 - 如果你手动修改过 `HMAC_SECRET`，请确保 Master 和 Agent 使用相同的密钥——这需要在 Master 和 Agent 的配置文件中同步设置。
+
+#### 配对密钥握手（v4.3.2-hardened.2 起）
+
+`CHAT_ID` 是公开信息，不适合作为首次握手的共享秘密。新版改为：
+
+1. **Agent 安装时生成 `PAIR_KEY`**（仅私有中枢模式），连同本机 TLS 公钥指纹作为注册暗号的第 9、10 字段：
+   `#REGISTER#|地区|节点|IP|端口|别名|OTA|版本|PAIR_KEY|证书指纹`
+2. **注册暗号只经过你自己的 Telegram 会话**到达 Master，Master 据此：以 `PAIR_KEY` 签名（不再用 `CHAT_ID`）、直接固定暗号中的证书指纹（不再 `--insecure` 盲取），然后下发 `HMAC_SECRET`。
+3. Agent 对 `/setkey` 始终接受 `PAIR_KEY` 签名 —— **Master 重装后，在节点上执行 `bash /opt/ip_sentinel/core/install.sh` 选 3 重发注册暗号并转发即可重新配对**，无需重装 Agent。
+
+Master 回复的入库确认会显示握手方式：`🔐 安全握手：配对密钥 + 证书固定`，或 `⚠️ 旧版注册格式（CHAT_ID 握手）`。
+
+**存量节点的过渡（无需手动操作）**：
+
+| 节点状态 | 升级后行为 |
+|:---|:---|
+| 已持有 `HMAC_SECRET` | 升级时自动补发 `PAIR_KEY`，验签身份不变 |
+| 仍处 `CHAT_ID` 验签态 | 暂不生成 `PAIR_KEY`（否则会与 Master 失联）；新版 Master 每次启动会对已固定证书的节点用 `CHAT_ID` 引导下发 `HMAC_SECRET`，之后再升级一次即补发 |
+| 官方公共网关模式 | 不生成 `PAIR_KEY`，注册暗号保持 8 字段（公共 Master 不识别配对字段） |
+
+> ⚠️ `PAIR_KEY` 与 `HMAC_SECRET` 同等敏感：注册暗号消息会留在 Telegram 聊天记录里，注意账号安全。
 
 #### 签名格式 v2（参数全覆盖）兼容矩阵
 

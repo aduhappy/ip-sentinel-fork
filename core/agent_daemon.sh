@@ -124,32 +124,23 @@ def clean_used_signs():
         else:
             break
 
-# [权限鉴权] 提取 HMAC_SECRET 作为 PSK 预共享密钥（双轨兼容：无 HMAC_SECRET 时回退至 CHAT_ID）
+# [权限鉴权] 验签密钥优先级：HMAC_SECRET（Master 已下发）> PAIR_KEY（安装时生成的配对密钥）> CHAT_ID（仅旧版未配对节点兼容）
+# PAIR_KEY 只随注册暗号经用户自己的 Telegram 会话交给 Master；CHAT_ID 是公开信息，新装节点不再以其作为验签密钥
 AUTH_TOKEN = ""
 CHAT_ID = ""
+PAIR_KEY = ""
 if os.path.exists('/opt/ip_sentinel/config.conf'):
+    _cfg = {}
     with open('/opt/ip_sentinel/config.conf', 'r') as f:
         for line in f:
             line = line.strip()
-            if line.startswith('HMAC_SECRET='):
-                AUTH_TOKEN = line.split('=', 1)[1].strip('"\'')
-                break
-    # 向后兼容：无 HMAC_SECRET 时使用 CHAT_ID
-    if not AUTH_TOKEN:
-        with open('/opt/ip_sentinel/config.conf', 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('CHAT_ID='):
-                    AUTH_TOKEN = line.split('=', 1)[1].strip('"\'')
-                    break
-    # [HMAC 密钥同步] 加载 CHAT_ID 供 /setkey 引导验签使用（密钥轮换时刻双方共享秘密）
-    if not CHAT_ID:
-        with open('/opt/ip_sentinel/config.conf', 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('CHAT_ID='):
-                    CHAT_ID = line.split('=', 1)[1].strip('"\'')
-                    break
+            if '=' in line and not line.startswith('#'):
+                k, v = line.split('=', 1)
+                _cfg.setdefault(k, v.strip('"\''))
+    CHAT_ID = _cfg.get('CHAT_ID', '')
+    if re.fullmatch(r'[0-9a-f]{64}', _cfg.get('PAIR_KEY', '')):
+        PAIR_KEY = _cfg['PAIR_KEY']
+    AUTH_TOKEN = _cfg.get('HMAC_SECRET', '') or PAIR_KEY or CHAT_ID
 
 class AgentHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -210,8 +201,12 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
 
                 sign_ok = sign_matches(AUTH_TOKEN)
 
-                # [HMAC 密钥同步] 引导式验签（仅 /setkey）：已持有旧随机密钥的 Agent，在密钥轮换时刻
-                # 额外接受以 CHAT_ID 签名的 setkey 指令（注册时双方唯一已知共享秘密），确保密钥可平滑下发。
+                # [配对引导] /setkey 与 /cert_fp 额外接受 PAIR_KEY 签名：Master 重装或更换密钥后，
+                # 凭用户转发的注册暗号（携带 PAIR_KEY）即可重新配对，无需重装 Agent
+                if not sign_ok and PAIR_KEY and req_path in ('/setkey', '/cert_fp'):
+                    sign_ok = sign_matches(PAIR_KEY)
+
+                # [HMAC 密钥同步] 旧版未配对节点（无 HMAC_SECRET 与 PAIR_KEY，AUTH_TOKEN 即 CHAT_ID）的 /setkey 引导验签。
                 # [安全] 引导仅当 AUTH_TOKEN 仍等于 CHAT_ID（密钥尚未轮换的初始状态）时有效；
                 # 一旦 setkey 成功轮换，AUTH_TOKEN != CHAT_ID 后引导立即关闭，
                 # 堵死"CHAT_ID 泄露 → 离线伪造 /setkey 轮换密钥"的节点失联攻击。

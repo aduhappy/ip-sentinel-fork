@@ -258,29 +258,35 @@ db_exec "ALTER TABLE ip_trend_log ADD COLUMN goog_status TEXT DEFAULT 'Unknown';
 db_exec "ALTER TABLE ip_trend_log ADD COLUMN gpt_status TEXT DEFAULT 'Unknown';" 2>/dev/null
 
 # ==========================================================
-# [HMAC 密钥同步] 启动时批量密钥收敛：回退态（HMAC_SECRET 曾等于 CHAT_ID）重新生成密钥后，
-# 对全部已注册节点用 CHAT_ID 引导签名批量重发 /setkey，将存量 Agent 收敛到新密钥。
-# 说明：CHAT_ID 引导验签仅在 Agent 密钥尚未轮换（AUTH_TOKEN == CHAT_ID）时有效，
-# 因此用 CHAT_ID 签名的 setkey 只对新/未轮换 Agent 生效，已持有新密钥的 Agent 不受影响。
+# [HMAC 密钥同步] 启动时批量密钥收敛：用 CHAT_ID 引导签名重发 /setkey，将仍处于 CHAT_ID 验签态的存量 Agent 收敛到 HMAC_SECRET。
+# 说明：CHAT_ID 引导验签仅在 Agent 密钥尚未轮换（AUTH_TOKEN == CHAT_ID，即旧版未配对节点）时有效，
+# 已持有密钥或已配对 (PAIR_KEY) 的 Agent 会以 401 拒收，不受影响。
+#   - 常态：每次启动只对已固定证书指纹的节点执行，密钥不会在未校验证书的 TLS 上发出
+#   - 回退态重新生成密钥后（KEY_REGEN=1）：对全部节点执行（含尚无证书指纹的节点，沿用原逻辑）
+# 后台执行，离线节点的连接超时不阻塞指令轮询启动。
 # ==========================================================
 if [ "$KEY_REGEN" = "1" ]; then
     ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes;" 2>/dev/null)
-    if [ -n "$ALL_NODES" ]; then
-        echo "ℹ️ [Master] 检测到密钥回退态已重新生成，开始对存量节点批量下发 HMAC_SECRET..." >&2
+else
+    ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE IFNULL(cert_fp, '') != '';" 2>/dev/null)
+fi
+if [ -n "$ALL_NODES" ]; then
+    [ "$KEY_REGEN" = "1" ] && echo "ℹ️ [Master] 检测到密钥回退态已重新生成，开始对存量节点批量下发 HMAC_SECRET..." >&2
+    (
         echo "$ALL_NODES" | while IFS='|' read -r NNAME AIP APORT AFP; do
             if [ -n "$AIP" ] && [ -n "$APORT" ]; then
-                # 证书指纹未知时此通道固定使用 --insecure（与注册时刻握手一致）
-                SETKEY_RESP=$(call_agent "$AIP" "$APORT" "/setkey" "&key=${HMAC_SECRET}" "$AFP" "$CHAT_ID")
+                # 证书指纹未知时此通道固定使用 --insecure（与注册时刻握手一致，仅 KEY_REGEN 时出现）
+                SETKEY_RESP=$(call_agent "$AIP" "$APORT" "/setkey" "&key=${HMAC_SECRET}" "$AFP" "$CHAT_ID" 2>/dev/null)
                 if [[ "$SETKEY_RESP" == *"Action Accepted: setkey"* ]]; then
-                    echo "ℹ️ [Master] 节点 ${NNAME} 密钥同步成功" >&2
-                else
+                    echo "ℹ️ [Master] 节点 ${NNAME} 密钥同步成功（已脱离 CHAT_ID 验签）" >&2
+                elif [ "$KEY_REGEN" = "1" ]; then
                     echo "⚠️ [Master] 节点 ${NNAME} 密钥同步失败/超时（Agent 可能旧版不支持 /setkey，将保持 CHAT_ID 回退兼容）" >&2
                 fi
             fi
         done
-    else
-        echo "ℹ️ [Master] 未发现已注册节点，跳过批量密钥收敛" >&2
-    fi
+    ) &
+elif [ "$KEY_REGEN" = "1" ]; then
+    echo "ℹ️ [Master] 未发现已注册节点，跳过批量密钥收敛" >&2
 fi
 
 # ==========================================================
@@ -375,10 +381,10 @@ while true; do
                 # 兼容性拆包: 自动判定不同世代版本的挂载载荷
                 FIELD_COUNT=$(echo "$REG_LINE" | awk -F'|' '{print NF}')
                 # 循环内复用变量，先清空可选字段，防止沿用上一条注册的残值
-                RAW_VERSION=""
+                RAW_VERSION=""; RAW_PAIR=""; RAW_PIN=""
                 if [ "$FIELD_COUNT" -ge 7 ]; then
-                    # 第 8 字段为版本号；末尾 _ 吸收多余字段，避免并入前一字段（此前 RAW_OTA 会吞下 "true|版本号"）
-                    IFS='|' read -r MAGIC RAW_REGION RAW_NODE RAW_IP RAW_PORT RAW_ALIAS RAW_OTA RAW_VERSION _ <<< "$REG_LINE"
+                    # 第 8~10 字段：版本号、配对密钥、TLS 公钥指纹；末尾 _ 吸收多余字段，避免并入前一字段
+                    IFS='|' read -r MAGIC RAW_REGION RAW_NODE RAW_IP RAW_PORT RAW_ALIAS RAW_OTA RAW_VERSION RAW_PAIR RAW_PIN _ <<< "$REG_LINE"
                 elif [ "$FIELD_COUNT" -eq 6 ]; then
                     IFS='|' read -r MAGIC RAW_REGION RAW_NODE RAW_IP RAW_PORT RAW_ALIAS <<< "$REG_LINE"
                     RAW_OTA="false"
@@ -405,6 +411,16 @@ while true; do
 
                 # 第 8 字段（agent_version），用于 OTA 升级追踪
                 AGENT_VERSION=$(echo "$RAW_VERSION" | tr -cd 'a-zA-Z0-9._-' | cut -c 1-20)
+
+                # [配对引导] 第 9 字段：Agent 安装时生成的配对密钥；第 10 字段：Agent TLS 公钥指纹。
+                # 二者只随注册暗号经用户自己的 Telegram 会话到达（已校验 CHAT_ID），据此完成首次握手：
+                # 以配对密钥代替公开的 CHAT_ID 签名，并从第一个请求起就固定证书，不再 --insecure 盲信网络上取回的指纹。
+                # 旧版 Agent 无这两个字段时回退原流程（CHAT_ID 引导 + 网络取指纹）。
+                AGENT_PAIR_KEY=""
+                [[ "$RAW_PAIR" =~ ^[0-9a-f]{64}$ ]] && AGENT_PAIR_KEY="$RAW_PAIR"
+                AGENT_PIN=""
+                [[ "$RAW_PIN" =~ ^[A-Za-z0-9+/]{43}=$ ]] && AGENT_PIN="$RAW_PIN"
+                BOOT_KEY="${AGENT_PAIR_KEY:-$CHAT_ID}"
                 
                 # SSRF 拦截墙（使用 Python ipaddress 库全面验证 — 遍历所有 IP）
                 if echo "$AGENT_IP" | python3 -c "
@@ -443,29 +459,31 @@ except ValueError:
                 # [v4.2.2 容灾对齐] 允许 agent_ip 字段以逗号分隔的形式完整固化多路由通道
                 db_exec "INSERT INTO nodes (chat_id, node_name, agent_ip, agent_port, last_seen, region, node_alias, enable_ota, cert_fp, agent_version) VALUES ('$CHAT_ID', '$NODE_NAME', '$AGENT_IP', '$AGENT_PORT', CURRENT_TIMESTAMP, '$AGENT_REGION', '$NODE_ALIAS', '$AGENT_OTA', '', '$AGENT_VERSION') ON CONFLICT(chat_id, node_name) DO UPDATE SET agent_ip='$AGENT_IP', agent_port='$AGENT_PORT', last_seen=CURRENT_TIMESTAMP, region='$AGENT_REGION', node_alias='$NODE_ALIAS', enable_ota='$AGENT_OTA', cert_fp=CASE WHEN cert_fp='' THEN '' ELSE cert_fp END, agent_version=CASE WHEN '$AGENT_VERSION' != '' THEN '$AGENT_VERSION' ELSE agent_version END;"
 
-                # [P1-002] 注册后尝试获取 Agent 证书指纹用于后续 TLS 固定钉扎
-                CERT_FP=""
-                if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
+                # [P1-002] 注册后确定 Agent 证书指纹用于后续 TLS 固定钉扎：优先采用注册暗号携带的指纹
+                CERT_FP="$AGENT_PIN"
+                if [ -z "$CERT_FP" ] && [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ]; then
                     AGENT_SINGLE_IP=$(echo "$AGENT_IP" | tr '_' ',' | cut -d',' -f1 | tr -d '[]')
                     # [修复] /cert_fp 位于 Agent 验签门内，裸 curl 会被 401 拒收。
                     # 注册时刻双方共享秘密是 CHAT_ID（新 Agent 以 CHAT_ID 验签 / 老 Agent 走 CHAT_ID 引导），
                     # 因此用 CHAT_ID 签名构造 URL 拉取指纹，成功后 P1-002 证书固定才能真实生效。
                     # 首次获取指纹时 Agent 只有自签名证书，所以需要用 --insecure（call_agent 在无指纹时自动使用）；
                     # 经 call_agent 发出以复用 v2 签名及对旧 Agent 的 v1 降级
-                    CERT_FP=$(call_agent "$AGENT_SINGLE_IP" "$AGENT_PORT" "/cert_fp" "" "" "$CHAT_ID" 2>/dev/null)
-                    # [P1-002] 校验公钥 DER SHA256 的 base64（44 字符，末位 =）；旧版 hex 指纹不再接受
-                    if [ -n "$CERT_FP" ] && [[ "$CERT_FP" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
-                        db_exec "UPDATE nodes SET cert_fp='$CERT_FP' WHERE chat_id='$CHAT_ID' AND node_name='$NODE_NAME';"
-                    fi
+                    CERT_FP=$(call_agent "$AGENT_SINGLE_IP" "$AGENT_PORT" "/cert_fp" "" "" "$BOOT_KEY" 2>/dev/null)
+                fi
+                # [P1-002] 校验公钥 DER SHA256 的 base64（44 字符，末位 =）；旧版 hex 指纹不再接受
+                if [[ "$CERT_FP" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+                    db_exec "UPDATE nodes SET cert_fp='$CERT_FP' WHERE chat_id='$CHAT_ID' AND node_name='$NODE_NAME';"
+                else
+                    CERT_FP=""
                 fi
 
                 # [HMAC 密钥同步] 向 Agent 下发 Master 的 HMAC_SECRET，确保双方密钥一致
-                # 设计：注册时刻的共享秘密是 CHAT_ID（老 Agent 无 HMAC_SECRET 时回退 CHAT_ID 验签；
-                #       已持有旧随机密钥的 Agent 对 /setkey 额外开放 CHAT_ID 引导验签），因此用 CHAT_ID 签名下发。
+                # 设计：新版 Agent 以配对密钥签名下发（Agent 对 /setkey 始终接受 PAIR_KEY，Master 重装后亦可重新配对）；
+                #       旧版 Agent 无配对密钥，回退 CHAT_ID 引导签名（仅其尚未轮换密钥时有效）。
+                # 证书指纹已知时固定证书下发，密钥不在未校验的 TLS 上传输。
                 # Agent 的 /setkey 路由收到后即持久化为新密钥，后续指令由 Master 用新 HMAC_SECRET 签名。
                 if [ -n "$AGENT_IP" ] && [ -n "$AGENT_PORT" ] && [ -n "$HMAC_SECRET" ]; then
-                    # 新 Agent 证书指纹尚未入库，此通道固定使用 --insecure（与注册时刻握手一致）
-                    SETKEY_RESP=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/setkey" "&key=${HMAC_SECRET}" "" "$CHAT_ID")
+                    SETKEY_RESP=$(call_agent "$AGENT_IP" "$AGENT_PORT" "/setkey" "&key=${HMAC_SECRET}" "$CERT_FP" "$BOOT_KEY")
                     if [[ "$SETKEY_RESP" == *"Action Accepted: setkey"* ]]; then
                         echo "ℹ️ [Master] 节点 ${NODE_NAME} 注册完成，已下发 HMAC_SECRET 密钥同步指令" >&2
                     else
@@ -481,6 +499,12 @@ except ValueError:
                     SHOW_MSG="✅ **司令部确认 (v${MASTER_VERSION})**%0A节点 \`${NODE_ALIAS}\` 档案已录入！%0A🌐 主通讯：\`${MAIN_SHOW_IP}\`%0A📡 容灾备用：\`${BACKUP_SHOW_IP}\`"
                 else
                     SHOW_MSG="✅ **司令部确认 (v${MASTER_VERSION})**%0A节点 \`${NODE_ALIAS}\` 档案已录入！%0A🌐 通讯 IP：\`${MAIN_SHOW_IP}\`"
+                fi
+                # [配对引导] 回显握手方式，便于识别仍走 CHAT_ID 旧握手的节点
+                if [ -n "$AGENT_PAIR_KEY" ]; then
+                    SHOW_MSG="${SHOW_MSG}%0A🔐 安全握手：配对密钥$([ -n "$AGENT_PIN" ] && echo ' + 证书固定')"
+                else
+                    SHOW_MSG="${SHOW_MSG}%0A⚠️ 旧版注册格式（CHAT_ID 握手），建议升级该节点"
                 fi
                 send_msg "$CHAT_ID" "$SHOW_MSG"
                 

@@ -78,6 +78,18 @@ version_lt() {
     test "$(printf '%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" && test "$1" != "$2"
 }
 
+# [配对引导] 注册暗号第 9、10 字段：配对密钥与本机 TLS 公钥指纹（公钥 DER 的 SHA256 base64，与 /cert_fp 同算法）。
+# 仅在已生成配对密钥（私有中枢模式）时追加；官方公共网关的 Master 不识别这两个字段，保持原 8 字段格式。
+reg_pairing_suffix() {
+    [ -z "$PAIR_KEY" ] && return
+    local cert="${INSTALL_DIR}/core/cert.pem" pin=""
+    if [ -f "$cert" ]; then
+        pin=$(set -o pipefail; openssl x509 -pubkey -noout -in "$cert" 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | openssl enc -base64 -A 2>/dev/null) || pin=""
+        [[ "$pin" =~ ^[A-Za-z0-9+/]{43}=$ ]] || pin=""
+    fi
+    printf '|%s|%s' "$PAIR_KEY" "$pin"
+}
+
 # ==========================================================
 # [依赖装甲] 多分支包管理器嗅探与极简系统补全
 # ==========================================================
@@ -272,7 +284,7 @@ else
         fi
 
         # 组装注册指令
-        REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${AGENT_VERSION:-}"
+        REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${AGENT_VERSION:-}$(reg_pairing_suffix)"
 
         echo -e "\n📤 正在向 Telegram 推送注册指令..."
         TEXT_MSG="✨ *IP-Sentinel 重新发送注册指令！*
@@ -703,8 +715,11 @@ if [ "$UPGRADE_MODE" == "false" ]; then
     LANG_PARAMS=$(jq -r '.google_module.lang_params' "$REGION_JSON_FILE")
     VALID_URL_SUFFIX=$(jq -r '.google_module.valid_url_suffix' "$REGION_JSON_FILE")
 
-    # [HMAC 密钥同步] Agent 不再独立生成 HMAC 签名密钥，留空等待 Master 注册时通过 /setkey 下发（无密钥时回退 CHAT_ID 验签兼容）
+    # [HMAC 密钥同步] Agent 不再独立生成 HMAC 签名密钥，留空等待 Master 注册时通过 /setkey 下发
     HMAC_SECRET="${HMAC_SECRET:-}"
+    # [配对引导] 生成配对密钥（仅私有中枢模式）：随注册暗号经用户 Telegram 会话交给 Master，替代公开的 CHAT_ID 完成首次握手
+    PAIR_KEY=""
+    [ "$TG_TOKEN" != "OFFICIAL_GATEWAY_MODE" ] && PAIR_KEY=$(openssl rand -hex 32)
 
     cat > "$CONFIG_FILE" << EOF
 # IP-Sentinel 本地固化配置 (生成时间: $(date '+%Y-%m-%d %H:%M:%S'))
@@ -724,6 +739,7 @@ TG_TOKEN="$TG_TOKEN"
 TG_API_URL="$TG_API_URL"
 CHAT_ID="$CHAT_ID"
 HMAC_SECRET="$HMAC_SECRET"
+PAIR_KEY="$PAIR_KEY"
 AGENT_PORT="$AGENT_PORT"
 INSTALL_DIR="$INSTALL_DIR"
 LOG_FILE="${INSTALL_DIR}/logs/sentinel.log"
@@ -843,8 +859,21 @@ if [ "$UPGRADE_MODE" == "true" ]; then
     # [HMAC 密钥同步] 升级时若已有密钥则保留，缺失时留空（回退 CHAT_ID 验签），等待 Master /setkey 下发
     if ! grep -q "^HMAC_SECRET=" "$CONFIG_FILE"; then
         echo 'HMAC_SECRET=""' >> "$CONFIG_FILE"
+        HMAC_SECRET=""
     else
         HMAC_SECRET=$(grep "^HMAC_SECRET=" "$CONFIG_FILE" | cut -d'"' -f2)
+    fi
+
+    # [配对引导] 存量节点补发配对密钥：仅限已完成密钥下发（HMAC_SECRET 非空）的私有中枢节点，其验签身份不变。
+    # 仍处 CHAT_ID 验签态的旧节点暂不生成，否则验签密钥会切换为 PAIR_KEY 而与 Master 失联；
+    # 这类节点由新版 Master 启动时的密钥收敛下发 HMAC_SECRET 后，下次升级再补。
+    if grep -q "^PAIR_KEY=" "$CONFIG_FILE"; then
+        PAIR_KEY=$(grep "^PAIR_KEY=" "$CONFIG_FILE" | cut -d'"' -f2)
+    elif [ -n "$HMAC_SECRET" ] && [ "$TG_TOKEN" != "OFFICIAL_GATEWAY_MODE" ]; then
+        PAIR_KEY=$(openssl rand -hex 32)
+        echo "PAIR_KEY=\"$PAIR_KEY\"" >> "$CONFIG_FILE"
+    else
+        PAIR_KEY=""
     fi
 fi
 
@@ -1210,7 +1239,7 @@ EOF
 if [[ -n "$TG_TOKEN" ]] && [[ -n "$CHAT_ID" ]]; then
     
     # 注册报文中塞入多宿主弹匣 SAFE_COMM_IP
-    REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${SAFE_COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${TARGET_VERSION}"
+    REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${SAFE_COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${TARGET_VERSION}$(reg_pairing_suffix)"
     
     if [ "$UPGRADE_MODE" == "true" ]; then
         OLD_VERSION=$(grep "^AGENT_VERSION=" "$CONFIG_FILE" | cut -d'"' -f2)

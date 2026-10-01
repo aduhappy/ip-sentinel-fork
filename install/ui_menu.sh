@@ -4,6 +4,18 @@
 # 核心功能: 交互式状态机、LBS 地图解析、Telegram 控制中枢配置
 # ==========================================================
 
+# [配对引导] 注册暗号第 9、10 字段：配对密钥与本机 TLS 公钥指纹（公钥 DER 的 SHA256 base64，与 /cert_fp 同算法）。
+# 仅在已生成配对密钥（私有中枢模式）时追加；官方公共网关的 Master 不识别这两个字段，保持原 8 字段格式。
+reg_pairing_suffix() {
+    [ -z "$PAIR_KEY" ] && return
+    local cert="${INSTALL_DIR}/core/cert.pem" pin=""
+    if [ -f "$cert" ]; then
+        pin=$(set -o pipefail; openssl x509 -pubkey -noout -in "$cert" 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | openssl enc -base64 -A 2>/dev/null) || pin=""
+        [[ "$pin" =~ ^[A-Za-z0-9+/]{43}=$ ]] || pin=""
+    fi
+    printf '|%s|%s' "$PAIR_KEY" "$pin"
+}
+
 do_fetch_map() {
     echo -e "\n[2/7] 正在连线云端，拉取全球节点地图..."
     curl -fsSL --connect-timeout 10 --retry 3 "${REPO_RAW_URL}/data/map.json" -o "${SECURE_TMP}/map.json"
@@ -126,7 +138,7 @@ do_handle_menu() {
             fi
 
             # 组装注册指令
-            REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}"
+            REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${AGENT_VERSION:-}$(reg_pairing_suffix)"
 
             echo -e "\n📤 正在向 Telegram 推送注册指令..."
             TEXT_MSG="✨ *IP-Sentinel 重新发送注册指令！*
@@ -423,7 +435,7 @@ do_final_report() {
     if [[ -n "$TG_TOKEN" ]] && [[ -n "$CHAT_ID" ]]; then
         
         # 注册报文中塞入多宿主弹匣 SAFE_COMM_IP
-        REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${SAFE_COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}"
+        REG_MSG="#REGISTER#|${REGION_CODE}|${NODE_NAME}|${SAFE_COMM_IP}|${AGENT_PORT}|${NODE_ALIAS}|${ENABLE_OTA}|${TARGET_VERSION}$(reg_pairing_suffix)"
         
         if [ "$UPGRADE_MODE" == "true" ]; then
             OLD_VERSION=$(grep "^AGENT_VERSION=" "$CONFIG_FILE" | cut -d'"' -f2)

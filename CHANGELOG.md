@@ -2,6 +2,13 @@
 
 ## [v4.3.2-hardened.2] - 2026-10-01
 
+### 🔒 安全修复 (Hardened)
+- **首次握手不再依赖公开的 CHAT_ID（配对密钥）** — 此前新节点在收到 `/setkey` 前以 `CHAT_ID` 作为验签密钥，知道"IP + 端口 + CHAT_ID"的人即可抢先下发自己的密钥接管节点，且密钥经 `--insecure` 连接下发。现 Agent 安装时生成 `PAIR_KEY`，与本机 TLS 公钥指纹一起作为注册暗号第 9、10 字段经用户 Telegram 会话交给 Master：Master 以 `PAIR_KEY` 签名、固定暗号中的证书后下发 `HMAC_SECRET`，新装节点全程不接受 `CHAT_ID`
+- **Master 重装后可凭注册暗号重新配对** — Agent 对 `/setkey`、`/cert_fp` 始终接受 `PAIR_KEY` 签名；此前已轮换密钥的节点在 Master 重装后只能重装 Agent
+- **存量 CHAT_ID 态节点自动收敛** — Master 每次启动在后台对已固定证书的节点用 `CHAT_ID` 引导下发 `HMAC_SECRET`（已轮换节点以 401 拒收，无副作用），密钥不在未校验证书的连接上发出
+- **注册确认回显握手方式**，便于识别仍走旧握手的节点
+- **模块化安装路径的注册暗号补齐版本号字段**（此前缺第 8 字段）
+
 ### 🐛 Bug Fixes
 - **注册解析把版本号并入 OTA 字段** — Master 按 7 个变量拆分注册暗号，第 7 字段 (OTA) 会吞下 `true|版本号`；旧版本号全为数字时恰好被过滤掉，`4.3.2-hardened.1` 含字母后会存成 `truehardened`，节点被全舰队 OTA 漏掉。现按位拆分全部字段，并在 Master 启动时自愈已被污染的记录
 
