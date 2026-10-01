@@ -1,5 +1,10 @@
 # Changelog
 
+## [v4.3.2-hardened.3] - 2026-10-01
+
+### 🐛 Bug Fixes
+- **启动密钥收敛从未生效** — `master.conf` 不含 `CHAT_ID`，启动时 `$CHAT_ID` 为空，收敛（含原 KEY_REGEN 分支）实际以 `HMAC_SECRET`/空串签名，CHAT_ID 态节点全部拒收。现取数据库中节点所属会话的 `chat_id` 作为引导密钥
+
 ## [v4.3.2-hardened.2] - 2026-10-01
 
 ### 🔒 安全修复 (Hardened)

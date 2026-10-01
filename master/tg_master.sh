@@ -265,18 +265,22 @@ db_exec "ALTER TABLE ip_trend_log ADD COLUMN gpt_status TEXT DEFAULT 'Unknown';"
 #   - 回退态重新生成密钥后（KEY_REGEN=1）：对全部节点执行（含尚无证书指纹的节点，沿用原逻辑）
 # 后台执行，离线节点的连接超时不阻塞指令轮询启动。
 # ==========================================================
+# 注意：启动时 CHAT_ID 尚未从任何会话取得（master.conf 不含 CHAT_ID），引导密钥必须取节点所属会话的 chat_id，
+# 此前直接用空的 $CHAT_ID，call_agent 退化为以 HMAC_SECRET/空串签名，收敛从未生效。
 if [ "$KEY_REGEN" = "1" ]; then
-    ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes;" 2>/dev/null)
+    ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, ''), chat_id FROM nodes;" 2>/dev/null)
 else
-    ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE IFNULL(cert_fp, '') != '';" 2>/dev/null)
+    ALL_NODES=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, ''), chat_id FROM nodes WHERE IFNULL(cert_fp, '') != '';" 2>/dev/null)
 fi
 if [ -n "$ALL_NODES" ]; then
     [ "$KEY_REGEN" = "1" ] && echo "ℹ️ [Master] 检测到密钥回退态已重新生成，开始对存量节点批量下发 HMAC_SECRET..." >&2
     (
-        echo "$ALL_NODES" | while IFS='|' read -r NNAME AIP APORT AFP; do
-            if [ -n "$AIP" ] && [ -n "$APORT" ]; then
+        echo "$ALL_NODES" | while IFS='|' read -r NNAME AIP APORT AFP NCHAT; do
+            if [ -n "$AIP" ] && [ -n "$APORT" ] && [[ "$NCHAT" =~ ^-?[0-9]+$ ]]; then
+                # call_agent 的 CHAT_ID 降级同样取该节点会话（子 shell 内赋值，不外泄）
+                CHAT_ID="$NCHAT"
                 # 证书指纹未知时此通道固定使用 --insecure（与注册时刻握手一致，仅 KEY_REGEN 时出现）
-                SETKEY_RESP=$(call_agent "$AIP" "$APORT" "/setkey" "&key=${HMAC_SECRET}" "$AFP" "$CHAT_ID" 2>/dev/null)
+                SETKEY_RESP=$(call_agent "$AIP" "$APORT" "/setkey" "&key=${HMAC_SECRET}" "$AFP" "$NCHAT" 2>/dev/null)
                 if [[ "$SETKEY_RESP" == *"Action Accepted: setkey"* ]]; then
                     echo "ℹ️ [Master] 节点 ${NNAME} 密钥同步成功（已脱离 CHAT_ID 验签）" >&2
                 elif [ "$KEY_REGEN" = "1" ]; then
