@@ -137,13 +137,25 @@ do_master_config() {
                 ENABLE_MASTER_OTA="true"
                 echo -e "✅ \033[32m已开启司令部 OTA 权限，金蝉脱壳引信已挂载。\033[0m"
             fi
+
+            # [访问控制] 私有中枢只响应所有者，防止陌生人注册节点骗取全局 HMAC_SECRET
+            echo -e "\n[2.2/4] 司令部所有者绑定"
+            echo -e "💡 私有中枢只响应该账号；回车跳过则绑定第一个向机器人发送消息的账号。"
+            read -p "请输入您的 Telegram Chat ID: " OWNER_CHAT_ID
+            if ! [[ "$OWNER_CHAT_ID" =~ ^-?[0-9]{5,}$ ]]; then
+                [ -n "$OWNER_CHAT_ID" ] && echo -e "\033[33m⚠️ Chat ID 格式无效，已跳过。\033[0m"
+                OWNER_CHAT_ID=""
+                echo -e "🔐 将绑定第一个向机器人发送消息的账号，请部署完成后立即向机器人发送 /start。"
+            else
+                echo -e "✅ \033[32m已锁定所有者: ${OWNER_CHAT_ID}\033[0m"
+            fi
         fi
 
         MASTER_IP=$( (curl -4 -s -m 3 api.ip.sb/ip || curl -4 -s -m 3 ifconfig.me) 2>/dev/null | tr -d '[:space:]' )
         MASTER_HASH=$(echo "${MASTER_IP:-127.0.0.1}" | md5sum | cut -c 1-4 | tr 'a-z' 'A-Z')
         MASTER_NODE="$(hostname | tr -cd 'a-zA-Z0-9' | cut -c 1-10)-${MASTER_HASH}"
         
-        echo -e "\n[2.2/4] 司令部展示别名设定 (用于面板区分多台 VPS)"
+        echo -e "\n[2.3/4] 司令部展示别名设定 (用于面板区分多台 VPS)"
         echo -e "💡 系统底层的不可变主键为: \033[33m${MASTER_NODE}\033[0m"
         read -p "请输入中枢展示别名 (如'美西主控机', 回车使用默认): " CUSTOM_MASTER_ALIAS
 
@@ -171,6 +183,7 @@ DB_FILE="$DB_FILE"
 MASTER_DIR="$MASTER_DIR"
 IS_OFFICIAL_GATEWAY="$IS_OFFICIAL_GATEWAY"
 ENABLE_MASTER_OTA="$ENABLE_MASTER_OTA"
+OWNER_CHAT_ID="${OWNER_CHAT_ID:-}"
 EOF
     fi
 

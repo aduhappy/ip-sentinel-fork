@@ -258,6 +258,35 @@ db_exec "ALTER TABLE ip_trend_log ADD COLUMN goog_status TEXT DEFAULT 'Unknown';
 db_exec "ALTER TABLE ip_trend_log ADD COLUMN gpt_status TEXT DEFAULT 'Unknown';" 2>/dev/null
 
 # ==========================================================
+# [访问控制] 私有中枢只服务所有者（官方公共网关模式除外）
+# 此前司令部对任意会话一视同仁（按 chat_id 隔离数据），而 HMAC_SECRET 全局唯一：陌生人只需找到机器人、
+# 用自己的 VPS 注册一个节点，就会经 /setkey 拿到全局密钥，进而签发指令控制所有者的全部节点。
+# 绑定来源：master.conf 的 OWNER_CHAT_ID → 存量库中唯一的节点会话（升级迁移）→ 库为空时第一个发来消息的会话。
+# 库中存在多个会话时不自动选择，拒绝一切请求直至手动配置（安全优先）。
+# ==========================================================
+persist_owner() {
+    sed -i "/^OWNER_CHAT_ID=/d" "$CONF"
+    echo "OWNER_CHAT_ID=\"$1\"" >> "$CONF"
+}
+OWNER_AMBIGUOUS=""
+if [ "$IS_OFFICIAL_GATEWAY" != "true" ] && ! [[ "$OWNER_CHAT_ID" =~ ^-?[0-9]{5,}$ ]]; then
+    OWNER_CHAT_ID=""
+    KNOWN_CHATS=$(db_exec "SELECT DISTINCT chat_id FROM nodes;" 2>/dev/null | grep -E '^-?[0-9]{5,}$')
+    KNOWN_N=$(printf '%s' "$KNOWN_CHATS" | grep -c .)
+    if [ "$KNOWN_N" = "1" ]; then
+        OWNER_CHAT_ID="$KNOWN_CHATS"
+        persist_owner "$OWNER_CHAT_ID"
+        echo "ℹ️ [Master] 已按存量节点将司令部绑定到会话 ${OWNER_CHAT_ID}" >&2
+    elif [ "$KNOWN_N" -gt 1 ]; then
+        OWNER_AMBIGUOUS="1"
+        echo "⛔ [Master] 库中节点分属多个会话，无法自动确定所有者；请在 $CONF 中设置 OWNER_CHAT_ID 后重启，期间拒绝一切请求" >&2
+        for KC in $KNOWN_CHATS; do
+            send_msg "$KC" "⛔ **司令部已启用所有者锁定**%0A检测到节点分属多个会话，无法自动确定所有者。%0A请 SSH 登录司令部，在 \`$CONF\` 中加入 \`OWNER_CHAT_ID=\"你的ChatID\"\` 后重启服务。在此之前司令部不响应任何指令。"
+        done
+    fi
+fi
+
+# ==========================================================
 # [HMAC 密钥同步] 启动时批量密钥收敛：用 CHAT_ID 引导签名重发 /setkey，将仍处于 CHAT_ID 验签态的存量 Agent 收敛到 HMAC_SECRET。
 # 说明：CHAT_ID 引导验签仅在 Agent 密钥尚未轮换（AUTH_TOKEN == CHAT_ID，即旧版未配对节点）时有效，
 # 已持有密钥或已配对 (PAIR_KEY) 的 Agent 会以 401 拒收，不受影响。
@@ -313,6 +342,19 @@ while true; do
             # [UI 状态机] 提前提取交互回调 ID，确保后续 UI 重绘正常流转
             CB_ID=$(echo "$UPDATE" | jq -r '.callback_query.id // empty')
             MSG_ID=$(echo "$UPDATE" | jq -r '.callback_query.message.message_id // empty')
+
+            # [访问控制] 私有中枢只响应所有者，其余会话的消息与按钮回调一律静默丢弃
+            if [ "$IS_OFFICIAL_GATEWAY" != "true" ]; then
+                # 轮询批次在管道子 shell 中执行，跨批次的绑定结果需从 master.conf 重新读取
+                [ -z "$OWNER_CHAT_ID" ] && OWNER_CHAT_ID=$(grep "^OWNER_CHAT_ID=" "$CONF" | cut -d'"' -f2)
+                [ "$OWNER_AMBIGUOUS" = "1" ] && continue
+                if [ -z "$OWNER_CHAT_ID" ] && [[ "$CHAT_ID" =~ ^-?[0-9]{5,}$ ]]; then
+                    OWNER_CHAT_ID="$CHAT_ID"
+                    persist_owner "$OWNER_CHAT_ID"
+                    send_msg "$CHAT_ID" "🔐 **司令部已绑定到当前账号**%0A此后只响应你的指令，其他账号的消息将被忽略。"
+                fi
+                [ "$CHAT_ID" != "$OWNER_CHAT_ID" ] && continue
+            fi
 
             # ----------------------------------------------------------
             # [业务流 A] 深海声呐态势感知一键入库模块
