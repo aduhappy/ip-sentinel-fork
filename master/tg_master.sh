@@ -413,6 +413,26 @@ while true; do
                 fi
             fi
 
+            # ----------------------------------------------------------
+            # [业务流 B2] 拦截 Bot 凭证切换回执 (移植自上游 #102)
+            # 识别：引用回复提示消息；或 10 分钟待填写窗口内直接发送的 Token 形态文本（部分客户端不附带引用）
+            # ----------------------------------------------------------
+            RECONFIG_PENDING_FILE="${MASTER_DIR:-/opt/ip_sentinel_master}/.reconfig_pending"
+            RECONFIG_PENDING_AGE=999999
+            [ -f "$RECONFIG_PENDING_FILE" ] && RECONFIG_PENDING_AGE=$(( $(date +%s) - $(cat "$RECONFIG_PENDING_FILE" 2>/dev/null || echo 0) ))
+            if [[ "$REPLY_TO_TEXT" == *"🔁 请回复本消息填写新 Bot 凭证"* ]] || \
+               { [ "$RECONFIG_PENDING_AGE" -lt 600 ] && [[ "$TEXT" =~ [0-9]{6,}:[A-Za-z0-9_-]{30,} ]]; }; then
+                rm -f "$RECONFIG_PENDING_FILE"
+                # [安全] 读取后立即删除含明文 Token 的用户消息（私聊中 Bot 可删除对方消息）
+                IN_MSG_ID=$(echo "$UPDATE" | jq -r '.message.message_id // empty')
+                if [ -n "$IN_MSG_ID" ]; then
+                    curl -s --connect-timeout 5 -m 10 -X POST "https://api.telegram.org/bot${TG_TOKEN}/deleteMessage" \
+                        -d "chat_id=${CHAT_ID}" -d "message_id=${IN_MSG_ID}" > /dev/null
+                fi
+                # 兼容上下两行或单行空格分隔
+                TEXT="do_reconfig:$(printf '%s' "$TEXT" | tr '\n\t' '  ' | tr -s ' ' | sed 's/^ //; s/ $//')"
+            fi
+
             # 消除终端 UI 加载状态圈
             if [ -n "$CB_ID" ]; then
                 curl -s --connect-timeout 5 -m 10 -X POST "https://api.telegram.org/bot${TG_TOKEN}/answerCallbackQuery" -d "callback_query_id=${CB_ID}" > /dev/null
@@ -591,7 +611,7 @@ except ValueError:
                     NODE_COUNT=$(db_exec "SELECT COUNT(*) FROM nodes WHERE chat_id='$CHAT_ID';")
 
                     if [ "$IS_OFFICIAL_GATEWAY" != "true" ]; then
-                        BTNS="[${BTN_MASTER_OTA}[{\"text\":\"🌍 进入全球雷达 (管理节点)\",\"callback_data\":\"list_nodes\"}], [{\"text\":\"🚀 唤醒全局巡逻\",\"callback_data\":\"all_run\"}, {\"text\":\"📊 获取全局简报\",\"callback_data\":\"all_reports\"}], [{\"text\":\"🔄 全网节点 OTA 热重载\",\"callback_data\":\"all_ota_confirm\"}], [{\"text\":\"🌟 前往 GitHub 点亮星标\",\"url\":\"https://github.com/hotyue/IP-Sentinel\"}]]"
+                        BTNS="[${BTN_MASTER_OTA}[{\"text\":\"🌍 进入全球雷达 (管理节点)\",\"callback_data\":\"list_nodes\"}], [{\"text\":\"🚀 唤醒全局巡逻\",\"callback_data\":\"all_run\"}, {\"text\":\"📊 获取全局简报\",\"callback_data\":\"all_reports\"}], [{\"text\":\"🔄 全网节点 OTA 热重载\",\"callback_data\":\"all_ota_confirm\"}, {\"text\":\"🔁 全舰队切换 Bot 凭证\",\"callback_data\":\"reconfig_confirm\"}], [{\"text\":\"🌟 前往 GitHub 点亮星标\",\"url\":\"https://github.com/hotyue/IP-Sentinel\"}]]"
                     else
                         BTNS="[[{\"text\":\"🌍 进入全球雷达 (管理节点)\",\"callback_data\":\"list_nodes\"}], [{\"text\":\"🚀 唤醒全局巡逻\",\"callback_data\":\"all_run\"}, {\"text\":\"📊 获取全局简报\",\"callback_data\":\"all_reports\"}], [{\"text\":\"🌟 前往 GitHub 点亮星标\",\"url\":\"https://github.com/hotyue/IP-Sentinel\"}]]"
                     fi
@@ -601,6 +621,84 @@ except ValueError:
                     send_ui "$CHAT_ID" "$TEXT_MSG" "$BTNS"
                     ;;
                     
+                "reconfig_confirm")
+                    # [安全] 仅限按钮回调触发，手打文本无效
+                    [ -z "$CB_ID" ] && continue
+                    [ "$IS_OFFICIAL_GATEWAY" == "true" ] && continue
+                    CONFIRM_BTNS="[[{\"text\":\"🚨 确认切换，填写新凭证\",\"callback_data\":\"reconfig_input\"}], [{\"text\":\"取消操作\",\"callback_data\":\"/start\"}]]"
+                    WARNING_MSG="☢️ **【最高指令：全舰队切换 Bot 凭证】**\n\n将向您名下**开启 OTA 权限且已固定证书**的节点下发凭证切换指令，各节点会：\n1. 用新 Token 验证身份，并向新 Bot 发送注册暗号（含配对密钥）。\n2. 原子重写本地凭证 (Token / Chat ID / API 地址)，无需重启。\n\n⚠️ **风险提示**：\n1. 切换后节点战报发往新 Bot。本司令部需改用新 Token（或在新机器部署新司令部），并把注册暗号转发给新 Bot 入库。\n2. 未开启 OTA 或未固定证书的节点不会下发（防止 Token 经未校验的连接泄露），需 SSH 处理。\n3. 新司令部接管后请停止旧司令部，防止双司令部抢注。\n\n**是否确定执行切换？**"
+                    send_ui "$CHAT_ID" "$WARNING_MSG" "$CONFIRM_BTNS"
+                    ;;
+
+                "reconfig_input")
+                    [ -z "$CB_ID" ] && continue
+                    [ "$IS_OFFICIAL_GATEWAY" == "true" ] && continue
+                    date +%s > "$RECONFIG_PENDING_FILE"
+                    # 纯文本提示 + jq 构造 JSON，避免 Markdown 反引号在 shell 中被当作命令替换（上游 #102 后续修复的根因）
+                    PROMPT_JSON=$(jq -cn --arg cid "$CHAT_ID" --arg txt "🔁 请回复本消息填写新 Bot 凭证:
+第一行：新 Bot Token
+第二行：新 Chat ID
+（也可同一行空格分隔；10 分钟内有效，读取后该消息会被自动删除）" '{chat_id: $cid, text: $txt, reply_markup: {force_reply: true}}')
+                    curl -s --connect-timeout 5 -m 10 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+                        -H "Content-Type: application/json" -d "$PROMPT_JSON" > /dev/null
+                    ;;
+
+                do_reconfig:*)
+                    [ "$IS_OFFICIAL_GATEWAY" == "true" ] && continue
+                    RECONFIG_INPUT="${TEXT#do_reconfig:}"
+                    NEW_TOKEN=$(echo "$RECONFIG_INPUT" | awk '{print $1}')
+                    NEW_CHAT_ID=$(echo "$RECONFIG_INPUT" | awk '{print $2}')
+                    if ! [[ "$NEW_TOKEN" =~ ^[0-9]{6,}:[A-Za-z0-9_-]{30,}$ ]] || ! [[ "$NEW_CHAT_ID" =~ ^-?[0-9]{5,}$ ]]; then
+                        send_msg "$CHAT_ID" "⛔ **凭证格式校验失败**%0AToken 形如 \`123456789:AAH...\`，Chat ID 为纯数字。请重新点击切换按钮填写。"
+                        continue
+                    fi
+
+                    # [步骤 0] 司令部先 getMe 验证新 Token，手误在此拦截
+                    ME_RESULT=$(curl -s --connect-timeout 5 -m 10 "https://api.telegram.org/bot${NEW_TOKEN}/getMe")
+                    if ! echo "$ME_RESULT" | jq -e '.ok == true' >/dev/null 2>&1; then
+                        ME_ERR=$(echo "$ME_RESULT" | jq -r '.description // .error_code // "网络异常"' 2>/dev/null | tr -d '\`&')
+                        send_msg "$CHAT_ID" "❌ **新 Token 验证失败**：\`${ME_ERR:-未知错误}\`%0A凭证未下发。"
+                        continue
+                    fi
+                    NEW_BOT_NAME=$(echo "$ME_RESULT" | jq -r '.result.username // "未知"' 2>/dev/null | tr -d '\`&')
+
+                    NODE_DATA=$(db_exec "SELECT node_name, agent_ip, agent_port, IFNULL(cert_fp, '') FROM nodes WHERE chat_id='$CHAT_ID' AND enable_ota='true';")
+                    if [ -z "$NODE_DATA" ]; then
+                        send_msg "$CHAT_ID" "⚠️ 您名下暂无开启 OTA 权限的节点，无需切换。"
+                        continue
+                    fi
+
+                    # [载荷封装] jq 构造 JSON + URL 安全 Base64；载荷整体被 v2 签名覆盖
+                    RECONFIG_B64=$(jq -cn --arg t "$NEW_TOKEN" --arg c "$NEW_CHAT_ID" '{token: $t, chat_id: $c}' | base64 | tr -d '\n=' | tr '+/' '-_')
+                    send_msg "$CHAT_ID" "📢 **正在向全舰队切换 Bot 凭证...**%0A目标 Bot: \`@${NEW_BOT_NAME}\`"
+
+                    RC_OK=0; RC_TOTAL=0; RC_FAIL=""; RC_SKIP=""; RC_NOPAIR=""
+                    while IFS='|' read -r NNAME AIP APORT AFP; do
+                        [ -z "$NNAME" ] && continue
+                        RC_TOTAL=$((RC_TOTAL + 1))
+                        # [安全] 未固定证书的节点不下发：Token 会随请求经 --insecure 连接传输
+                        if [ -z "$AFP" ]; then
+                            RC_SKIP="${RC_SKIP}%0A- \`${NNAME}\`"
+                            continue
+                        fi
+                        RESPONSE=$(call_agent "$AIP" "$APORT" "/trigger_reconfig" "&b64=${RECONFIG_B64}" "$AFP" 2>/dev/null)
+                        if [[ "$RESPONSE" == *"Action Accepted"* ]]; then
+                            RC_OK=$((RC_OK + 1))
+                            [[ "$RESPONSE" == *"pairing=no"* ]] && RC_NOPAIR="${RC_NOPAIR}%0A- \`${NNAME}\`"
+                        else
+                            RC_FAIL="${RC_FAIL}%0A- \`${NNAME}\` → \`$(printf '%s' "$RESPONSE" | head -n 1 | tr -d '\`&' | cut -c 1-80)\`"
+                        fi
+                        sleep 1
+                    done <<< "$NODE_DATA"
+
+                    SUMMARY="📡 **Bot 凭证切换结果**：成功 \`${RC_OK}/${RC_TOTAL}\` 台"
+                    [ -n "$RC_FAIL" ] && SUMMARY="${SUMMARY}%0A%0A❌ **失败（凭证未改动）**：${RC_FAIL}"
+                    [ -n "$RC_SKIP" ] && SUMMARY="${SUMMARY}%0A%0A⏭️ **未固定证书，未下发**（需 SSH 修改 config.conf）：${RC_SKIP}"
+                    [ -n "$RC_NOPAIR" ] && SUMMARY="${SUMMARY}%0A%0A⚠️ **无配对密钥的旧节点**（新机器部署的司令部无法自动接管，需先升级节点）：${RC_NOPAIR}"
+                    SUMMARY="${SUMMARY}%0A%0A📋 **后续**：%0A1. 在新 Bot 中把各节点发来的注册暗号转发给新 Bot。%0A2. 本机继续做司令部：修改 \`master.conf\` 的 \`TG_TOKEN\` 与 \`OWNER_CHAT_ID\` 后重启；或在新机器部署新司令部。%0A3. 新司令部接管后停止旧司令部。"
+                    send_msg "$CHAT_ID" "$SUMMARY"
+                    ;;
+
                 "all_ota_confirm")
                     CONFIRM_BTNS="[[{\"text\":\"🚨 我已了解风险，下发核按钮指令！\",\"callback_data\":\"all_ota_execute\"}], [{\"text\":\"取消操作\",\"callback_data\":\"/start\"}]]"
                     WARNING_MSG="☢️ **【最高指令：全舰队 OTA 升级】**\n\n此操作将向您名下**所有开启 OTA 权限的节点**下发重组指令，强制从云端拉取最新代码并进行热重载。\n\n⚠️ **核按钮风险提示**：\n1. 升级过程中守护进程会短暂重启，节点可能出现临时离线。\n2. 若遇 GitHub 源屏蔽或网络极度恶劣，少数节点可能需要手动干预。\n\n**是否确定挂载并执行 OTA 指令？**"
