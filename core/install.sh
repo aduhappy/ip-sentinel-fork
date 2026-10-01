@@ -72,7 +72,7 @@ CONFIG_FILE="${INSTALL_DIR}/config.conf"
 
 # [网络容灾] 挂载双栈并利用防抖重试护甲，从远端解析运行态版本约束
 TARGET_VERSION=$( (curl -fsSL --connect-timeout 5 --retry 2 "${REPO_RAW_URL}/version.txt" || curl -4 -fsSL --connect-timeout 5 --retry 2 "${REPO_RAW_URL}/version.txt") 2>/dev/null | grep "^AGENT_VERSION=" | cut -d'=' -f2 | tr -d '[:space:]')
-TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.3"}
+TARGET_VERSION=${TARGET_VERSION:-"4.3.2-hardened.4"}
 
 version_lt() {
     test "$(printf '%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" && test "$1" != "$2"
