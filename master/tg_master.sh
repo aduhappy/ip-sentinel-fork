@@ -241,6 +241,11 @@ db_exec "ALTER TABLE nodes ADD COLUMN enable_trust TEXT DEFAULT 'true';" 2>/dev/
 db_exec "ALTER TABLE nodes ADD COLUMN enable_ota TEXT DEFAULT 'false';" 2>/dev/null
 db_exec "ALTER TABLE nodes ADD COLUMN agent_version TEXT DEFAULT '';" 2>/dev/null
 
+# [数据自愈] 旧版注册解析把第 8 字段（版本号）并入 OTA 字段：版本号含字母（如 4.3.2-hardened.1）时会存成
+# 'truehardened' 等，节点从此被全舰队 OTA 的 enable_ota='true' 查询漏掉；启动时归一化
+db_exec "UPDATE nodes SET enable_ota='true' WHERE enable_ota LIKE 'true_%';" 2>/dev/null
+db_exec "UPDATE nodes SET enable_ota='false' WHERE enable_ota LIKE 'false_%';" 2>/dev/null
+
 # 构建与动态扩展 IP 质量历史趋势库
 db_exec "CREATE TABLE IF NOT EXISTS ip_trend_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -369,8 +374,11 @@ while true; do
                 
                 # 兼容性拆包: 自动判定不同世代版本的挂载载荷
                 FIELD_COUNT=$(echo "$REG_LINE" | awk -F'|' '{print NF}')
+                # 循环内复用变量，先清空可选字段，防止沿用上一条注册的残值
+                RAW_VERSION=""
                 if [ "$FIELD_COUNT" -ge 7 ]; then
-                    IFS='|' read -r MAGIC RAW_REGION RAW_NODE RAW_IP RAW_PORT RAW_ALIAS RAW_OTA <<< "$REG_LINE"
+                    # 第 8 字段为版本号；末尾 _ 吸收多余字段，避免并入前一字段（此前 RAW_OTA 会吞下 "true|版本号"）
+                    IFS='|' read -r MAGIC RAW_REGION RAW_NODE RAW_IP RAW_PORT RAW_ALIAS RAW_OTA RAW_VERSION _ <<< "$REG_LINE"
                 elif [ "$FIELD_COUNT" -eq 6 ]; then
                     IFS='|' read -r MAGIC RAW_REGION RAW_NODE RAW_IP RAW_PORT RAW_ALIAS <<< "$REG_LINE"
                     RAW_OTA="false"
@@ -395,11 +403,7 @@ while true; do
                 AGENT_OTA=$(echo "$RAW_OTA" | tr -cd 'a-z')
                 [ -z "$AGENT_OTA" ] && AGENT_OTA="false"
 
-                # 解析第 8 个字段（agent_version），用于 OTA 升级追踪
-                RAW_VERSION=""
-                if [ "$FIELD_COUNT" -ge 8 ]; then
-                    IFS='|' read -r _ _ _ _ _ _ _ RAW_VERSION <<< "$REG_LINE"
-                fi
+                # 第 8 字段（agent_version），用于 OTA 升级追踪
                 AGENT_VERSION=$(echo "$RAW_VERSION" | tr -cd 'a-zA-Z0-9._-' | cut -c 1-20)
                 
                 # SSRF 拦截墙（使用 Python ipaddress 库全面验证 — 遍历所有 IP）
