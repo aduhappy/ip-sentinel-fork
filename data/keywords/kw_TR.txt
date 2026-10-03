@@ -1,3 +1,13 @@
+adıyaman hava durumu
+ankara
+ekrem imamoğlu
+mehmet yalçınkaya
+yunus yıldırım
+belediye meclisi üyesi
+tarım ve kırsal kalkınmayı destekleme kurumu
+wetter
+antalya hava durumu
+погода
 pasaport
 film ekimi
 serkan bayram
@@ -88,13 +98,3 @@ doktorlar dizisi
 aksaray hava durumu
 indirim
 arnaud denis
-zehra güneş
-mebbis
-tolga kalender
-orkun kökçü
-afyon hava durumu
-başkan
-eskişehir hava durumu
-manisa hava durumu
-kanal d yayın akışı
-izmir hava durumu
